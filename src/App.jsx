@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import html2pdf from "html2pdf.js";
+import html2pdf from "html2pdf.js/dist/html2pdf.bundle.min.js";
 
 const DISCORD_WEBHOOK_URL = import.meta.env.VITE_DISCORD_WEBHOOK_URL || "";
 
