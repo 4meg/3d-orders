@@ -230,7 +230,7 @@ function downloadInvoicePDF(order) {
 
 export default function App() {
   const [page, setPage] = useState("orders");
-  const [orders, setOrders] = useState(() => loadData("orders_v4", defaultOrders));
+  const [orders, setOrders] = useState([]);
   const [colors, setColors] = useState(() => loadData("colors_v2", defaultColors));
   const [products, setProducts] = useState(() => loadData("products_v1", defaultProducts));
   const [search, setSearch] = useState("");
