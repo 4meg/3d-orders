@@ -1,5 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
 import html2pdf from "html2pdf.js/dist/html2pdf.bundle.min.js";
+import { db } from "./firebase";
+import {
+  collection,
+  addDoc,
+  getDocs,
+  doc,
+  updateDoc,
+  deleteDoc,
+} from "firebase/firestore";
 
 const DISCORD_WEBHOOK_URL = import.meta.env.VITE_DISCORD_WEBHOOK_URL || "";
 
@@ -242,9 +251,18 @@ export default function App() {
     notes: "",
   });
 
-  useEffect(() => localStorage.setItem("orders_v4", JSON.stringify(orders)), [orders]);
-  useEffect(() => localStorage.setItem("colors_v2", JSON.stringify(colors)), [colors]);
-  useEffect(() => localStorage.setItem("products_v1", JSON.stringify(products)), [products]);
+useEffect(() => {
+  async function fetchOrders() {
+    const snapshot = await getDocs(collection(db, "orders"));
+    const data = snapshot.docs.map((d) => ({
+      firebaseId: d.id,
+      ...d.data(),
+    }));
+    setOrders(data);
+  }
+
+  fetchOrders();
+}, []);
 
   const customers = useMemo(() => {
     const map = new Map();
@@ -355,7 +373,7 @@ const filteredOrders = useMemo(() => {
     });
   }
 
-  function submitOrder() {
+async function submitOrder() {
     if (!orderForm.customerName || !orderForm.phone || !orderForm.items[0]?.product) {
       return alert("اكتب اسم الزبون ورقم الهاتف وتفاصيل الطلب");
     }
@@ -388,12 +406,22 @@ const filteredOrders = useMemo(() => {
       createdAtISO: oldOrder?.createdAtISO || new Date().toISOString(),
       updatedAt: new Date().toLocaleString("ar-IQ"),
     };
+if (editingOrderId) {
+  const oldOrderDoc = orders.find((o) => o.id === editingOrderId);
 
-    if (editingOrderId) {
-      setOrders(orders.map((o) => (o.id === editingOrderId ? savedOrder : o)));
+  if (oldOrderDoc?.firebaseId) {
+    await updateDoc(doc(db, "orders", oldOrderDoc.firebaseId), savedOrder);
+  }
+
+  setOrders(orders.map((o) =>
+    o.id === editingOrderId
+      ? { ...savedOrder, firebaseId: oldOrderDoc?.firebaseId }
+      : o
+  ));
       sendDiscord(`✏️ تم تعديل طلب\nرقم الطلب: ${savedOrder.id}\nالزبون: ${savedOrder.customer.name}`);
     } else {
-      setOrders([savedOrder, ...orders]);
+      const docRef = await addDoc(collection(db, "orders"), savedOrder);
+setOrders([{ ...savedOrder, firebaseId: docRef.id }, ...orders]);
       const itemsText = savedOrder.items.map((i, idx) => {
         const lines = getItemEntries(i).map((e, eIdx) => `   ${eIdx + 1}- الاسم: ${e.name} | العدد: ${e.qty} | اللون: ${e.colorName}`).join("\n");
         return `${idx + 1}) ${i.product}\n${lines}`;
@@ -483,16 +511,31 @@ const filteredOrders = useMemo(() => {
     downloadHtmlAsPDF(html, "customers-report-night-store.pdf");
   }
 
-  function updateOrderStatus(orderId, status) {
-    const oldOrder = orders.find((o) => o.id === orderId);
-    setOrders(orders.map((o) => (o.id === orderId ? { ...o, status } : o)));
-    sendDiscord(`🔄 تحديث حالة طلب\nرقم الطلب: ${orderId}\nالزبون: ${oldOrder?.customer.name || ""}\nالحالة الجديدة: ${status}`);
+async function updateOrderStatus(orderId, status) {
+  const oldOrder = orders.find((o) => o.id === orderId);
+
+  if (oldOrder?.firebaseId) {
+    await updateDoc(doc(db, "orders", oldOrder.firebaseId), { status });
   }
 
-  function deleteOrder(orderId) {
-    if (!confirm("متأكد تريد حذف الطلب؟")) return;
-    setOrders(orders.filter((o) => o.id !== orderId));
+  setOrders(orders.map((o) =>
+    o.id === orderId ? { ...o, status } : o
+  ));
+
+  sendDiscord(`🔄 تحديث حالة طلب\nرقم الطلب: ${orderId}\nالزبون: ${oldOrder?.customer.name || ""}\nالحالة الجديدة: ${status}`);
+}
+
+async function deleteOrder(orderId) {
+  if (!confirm("متأكد تريد حذف الطلب؟")) return;
+
+  const oldOrder = orders.find((o) => o.id === orderId);
+
+  if (oldOrder?.firebaseId) {
+    await deleteDoc(doc(db, "orders", oldOrder.firebaseId));
   }
+
+  setOrders(orders.filter((o) => o.id !== orderId));
+}
 
   function addColor() {
     const name = newColor.name.trim();
