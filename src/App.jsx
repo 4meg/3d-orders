@@ -10,6 +10,7 @@ import {
   deleteDoc,
 } from "firebase/firestore";
 
+
 const DISCORD_WEBHOOK_URL = import.meta.env.VITE_DISCORD_WEBHOOK_URL || "";
 
 const DELIVERY_COMPANY = "الوسيط";
@@ -130,6 +131,40 @@ function parseOrderDate(order) {
 
 function formatMoney(value) {
   return `${Number(value || 0).toLocaleString()} د.ع`;
+}
+
+function formatOrderDate(dateString) {
+  const date = new Date(dateString);
+
+  return date.toLocaleString("en-GB", {
+    timeZone: "Asia/Baghdad",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function formatPhoneNumber(phone) {
+  const arabicNums = "٠١٢٣٤٥٦٧٨٩";
+  
+  let digits = String(phone)
+    .split("")
+    .map((c) => {
+      const index = arabicNums.indexOf(c);
+      return index > -1 ? index : c;
+    })
+    .join("");
+
+  digits = normalizePhone(digits);
+
+  if (digits.length === 11) {
+    return `${digits.slice(0, 4)} ${digits.slice(4, 7)} ${digits.slice(7)}`;
+  }
+
+  return digits;
 }
 
 function buildFormalWhatsAppMessage(order) {
@@ -281,23 +316,30 @@ useEffect(() => {
 const filteredOrders = useMemo(() => {
   const q = search.trim();
 
-  return orders.filter((o) => {
-    const itemsText = o.items
-      .map((i) =>
-        `${i.product} ${getItemEntries(i)
-          .map((e) => `${e.name} ${e.colorName}`)
-          .join(" ")}`
-      )
-      .join(" ");
+  return [...orders]
+    .sort((a, b) => {
+      const numA = Number(a.id?.replace("O-", "") || 0);
+      const numB = Number(b.id?.replace("O-", "") || 0);
+      return numA - numB; // من الأصغر للأكبر
+    })
+    .filter((o) => {
+      const itemsText = o.items
+        .map((i) =>
+          `${i.product} ${getItemEntries(i)
+            .map((e) => `${e.name} ${e.colorName}`)
+            .join(" ")}`
+        )
+        .join(" ");
 
-    const text = `${o.id} ${o.status} ${o.customer.name} ${o.customer.phone} ${o.customer.city} ${itemsText}`;
+      const text = `${o.id} ${o.status} ${o.customer.name} ${o.customer.phone} ${o.customer.city} ${itemsText}`;
 
-    const matchSearch = text.includes(q);
-    const matchStatus = statusFilter === "الكل" || o.status === statusFilter;
+      const matchSearch = text.includes(q);
+      const matchStatus = statusFilter === "الكل" || o.status === statusFilter;
 
-    return matchSearch && matchStatus;
-  });
+      return matchSearch && matchStatus;
+    });
 }, [orders, search, statusFilter]);
+
 
   const filteredCustomers = useMemo(() => {
     const q = search.trim();
@@ -421,7 +463,7 @@ if (editingOrderId) {
       sendDiscord(`✏️ تم تعديل طلب\nرقم الطلب: ${savedOrder.id}\nالزبون: ${savedOrder.customer.name}`);
     } else {
       const docRef = await addDoc(collection(db, "orders"), savedOrder);
-setOrders([{ ...savedOrder, firebaseId: docRef.id }, ...orders]);
+setOrders([...orders, { ...savedOrder, firebaseId: docRef.id }]);
       const itemsText = savedOrder.items.map((i, idx) => {
         const lines = getItemEntries(i).map((e, eIdx) => `   ${eIdx + 1}- الاسم: ${e.name} | العدد: ${e.qty} | اللون: ${e.colorName}`).join("\n");
         return `${idx + 1}) ${i.product}\n${lines}`;
@@ -853,7 +895,14 @@ function OrderCard({ order, updateOrderStatus, deleteOrder, startEditOrder }) {
         </div>
       ))}
 
-      <p><b>الزبون:</b> {order.customer.name} - {order.customer.phone}</p>
+      <p>
+  <b>الزبون:</b> {order.customer.name} -{" "}
+  {formatPhoneNumber(order.customer.phone)}
+</p>
+      <p>
+  <b>تاريخ الطلب:</b>{" "}
+  {formatOrderDate(order.createdAtISO || order.createdAt)}
+</p>
       <p><b>العنوان:</b> {order.customer.city} / {order.customer.address}</p>
       <p><b>السعر:</b> {order.price.toLocaleString()} د.ع | <b>العربون:</b> {order.deposit.toLocaleString()} د.ع | <b>المتبقي:</b> {(order.price - order.deposit).toLocaleString()} د.ع</p>
       <p><b>التوصيل:</b> {DELIVERY_COMPANY} | <b>أجرة التوصيل:</b> {DELIVERY_FEE.toLocaleString()} د.ع | <b>التتبع:</b> {order.tracking || "لا يوجد"}</p>
@@ -891,7 +940,7 @@ function CustomerCard({ customer }) {
 }
 
 const styles = {
-  app: { minHeight: "100vh", background: "#eef2f7", padding: 24, fontFamily: "Cairo, Tahoma, Arial, sans-serif", color: "#0f172a" },
+  app: { minHeight: "100vh", background: "#f1f5f9", padding: 24, fontFamily: "Cairo, Tahoma, Arial, sans-serif", color: "#0f172a" },
   topbar: { background: "#ffffff", borderRadius: 24, padding: 24, display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap", boxShadow: "0 10px 35px #0f172a14", border: "1px solid #e5e7eb" },
   title: { margin: 0, fontSize: 30, color: "#0f172a", fontWeight: 900 },
   subtitle: { margin: "8px 0 0", color: "#475569" },
@@ -907,13 +956,13 @@ const styles = {
   smallBlue: { border: 0, background: "#dbeafe", color: "#1d4ed8", borderRadius: 10, padding: "9px 12px", cursor: "pointer", fontWeight: 800, width: "fit-content" },
   addItemButton: { border: "1px dashed #2563eb", background: "#eff6ff", color: "#1d4ed8", borderRadius: 14, padding: 14, cursor: "pointer", fontWeight: 900 },
   stats: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 16, marginTop: 18 },
-  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))", gap: 16, marginTop: 18 },
+  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, marginTop: 18 },
   gridTwo: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16, marginTop: 18 },
   exportRow: { display: "flex", justifyContent: "flex-start", marginTop: 18 },
   tableWrap: { overflowX: "auto", background: "white", borderRadius: 16, border: "1px solid #e5e7eb" },
   table: { width: "100%", borderCollapse: "collapse", minWidth: 700 },
-  card: { background: "white", borderRadius: 24, padding: 22, boxShadow: "0 10px 35px #0f172a12", border: "1px solid #e5e7eb" },
-  form: { maxWidth: 980, margin: "18px auto", background: "white", borderRadius: 24, padding: 24, display: "grid", gap: 14, boxShadow: "0 10px 35px #0f172a12", border: "1px solid #e5e7eb" },
+  card: { background: "white", borderRadius: 24, padding: 22, boxShadow: "0 4px 20px rgba(15,23,42,0.08)", border: "1px solid #e5e7eb" },
+  form: { maxWidth: 980, margin: "18px auto", background: "white", borderRadius: 24, padding: 24, display: "grid", gap: 14, boxShadow: "0 4px 20px rgba(15,23,42,0.08)", border: "1px solid #e5e7eb" },
   formTitle: { margin: 0, color: "#0f172a", fontWeight: 900 },
   sectionTitle: { margin: "14px 0 0", color: "#1d4ed8", borderBottom: "1px solid #e5e7eb", paddingBottom: 8, fontWeight: 900 },
   search: { width: "100%", boxSizing: "border-box", marginTop: 18, border: "1px solid #cbd5e1", borderRadius: 16, padding: 16, fontSize: 16, outline: "none", background: "white", color: "#0f172a" },
