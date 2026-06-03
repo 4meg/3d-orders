@@ -264,13 +264,64 @@ function downloadInvoicePDF(order) {
 }
 
 export default function App() {
+  const SITE_PASSWORD = "333";
+
+  const [authorized, setAuthorized] = useState(
+    localStorage.getItem("site_auth") === "yes"
+  );
+
+  const [password, setPassword] = useState("");
+
+  if (!authorized) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
+          alignItems: "center",
+          gap: 15,
+        }}
+      >
+        <h2>ادخل رمز الدخول</h2>
+
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+
+        <button
+          onClick={() => {
+            if (password === SITE_PASSWORD) {
+              localStorage.setItem("site_auth", "yes");
+              setAuthorized(true);
+            } else {
+              alert("رمز غير صحيح");
+            }
+          }}
+        >
+          دخول
+        </button>
+      </div>
+    );
+  }
+
   const [page, setPage] = useState("orders");
   const [orders, setOrders] = useState([]);
-  const [colors, setColors] = useState(() => loadData("colors_v2", defaultColors));
-  const [products, setProducts] = useState(() => loadData("products_v1", defaultProducts));
+  const [colors, setColors] = useState(() =>
+    loadData("colors_v2", defaultColors)
+  );
+  const [products, setProducts] = useState(() =>
+    loadData("products_v1", defaultProducts)
+  );
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("الكل");
-  const [newColor, setNewColor] = useState({ name: "", code: "#000000" });
+  const [newColor, setNewColor] = useState({
+    name: "",
+    code: "#000000",
+  });
   const [newProduct, setNewProduct] = useState("");
   const [editingOrderId, setEditingOrderId] = useState(null);
 
