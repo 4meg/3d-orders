@@ -230,7 +230,17 @@ function MainApp({C, darkMode, setDarkMode}) {
   // ✅ فلتر مصلح تماماً
   const filteredOrders = useMemo(()=>{
     const q=search.trim().toLowerCase();
-    return [...orders]
+    // ✅ إزالة المكررات: نحتفظ بالأحدث (آخر تعديل) لكل رقم طلب
+    const byId = new Map();
+    for (const o of orders) {
+      const existing = byId.get(o.id);
+      if (!existing) { byId.set(o.id, o); continue; }
+      const tNew = new Date(o.updatedAt || o.createdAtISO || o.createdAt || 0).getTime();
+      const tOld = new Date(existing.updatedAt || existing.createdAtISO || existing.createdAt || 0).getTime();
+      if (tNew >= tOld) byId.set(o.id, o);
+    }
+    const unique = Array.from(byId.values());
+    return unique
       .sort((a,b)=>Number(a.id?.replace("O-","")||0)-Number(b.id?.replace("O-","")||0))
       .filter(o=>{
         const itemsTxt=o.items?.map(i=>`${i.product} ${getItemEntries(i).map(e=>`${e.name} ${e.colorName}`).join(" ")}`).join(" ")||"";
@@ -245,6 +255,17 @@ function MainApp({C, darkMode, setDarkMode}) {
         return matchSearch&&matchStatus;
       });
   },[orders,search,statusFilter]);
+
+  // ✅ عدد المكررات الموجودة (لعرضه بزر التنظيف)
+  const duplicateCount = useMemo(()=>{
+    const seen = new Set();
+    let dups = 0;
+    for (const o of orders) {
+      if (seen.has(o.id)) dups++;
+      else seen.add(o.id);
+    }
+    return dups;
+  },[orders]);
 
   const filteredCustomers = useMemo(()=>{
     const q=search.trim();
@@ -285,8 +306,12 @@ function MainApp({C, darkMode, setDarkMode}) {
       updatedAt:new Date().toLocaleString("ar-IQ"),
     };
     if(editingId){
-      if(old?.firebaseId) await updateDoc(doc(db,"orders",old.firebaseId),saved);
-      setOrders(orders.map(o=>o.id===editingId?{...saved,firebaseId:old?.firebaseId}:o));
+      // ✅ نحدّث كل النسخ المكررة بنفس الـ id
+      const allCopies = orders.filter(o=>o.id===editingId && o.firebaseId);
+      for (const copy of allCopies) {
+        try { await updateDoc(doc(db,"orders",copy.firebaseId),saved); } catch{}
+      }
+      setOrders(orders.map(o=>o.id===editingId?{...saved,firebaseId:o.firebaseId}:o));
       sendTelegram(buildTGMsg(saved,"edit"));
     } else {
       const ref=await addDoc(collection(db,"orders"),saved);
@@ -308,14 +333,21 @@ function MainApp({C, darkMode, setDarkMode}) {
 
   async function updateStatus(id,status) {
     const o=orders.find(x=>x.id===id);
-    if(o?.firebaseId) await updateDoc(doc(db,"orders",o.firebaseId),{status});
+    // ✅ نحدّث كل النسخ المكررة بنفس الـ id بـ Firebase (مو وحدة بس)
+    const allCopies = orders.filter(x=>x.id===id && x.firebaseId);
+    for (const copy of allCopies) {
+      try { await updateDoc(doc(db,"orders",copy.firebaseId),{status}); } catch{}
+    }
     setOrders(orders.map(x=>x.id===id?{...x,status}:x));
     sendTelegram(buildTGMsg({...o,newStatus:status},"status"));
   }
 
   async function delOrder(id) {
-    const o=orders.find(x=>x.id===id);
-    if(o?.firebaseId) await deleteDoc(doc(db,"orders",o.firebaseId));
+    // ✅ نحذف كل النسخ المكررة بنفس الـ id
+    const allCopies = orders.filter(x=>x.id===id && x.firebaseId);
+    for (const copy of allCopies) {
+      try { await deleteDoc(doc(db,"orders",copy.firebaseId)); } catch{}
+    }
     setOrders(orders.filter(x=>x.id!==id));
     setDeleteConfirm(null);
   }
@@ -352,6 +384,45 @@ function MainApp({C, darkMode, setDarkMode}) {
     setOrders(updated);
     setFixing(false);
     alert("تم إصلاح " + fixed + " طلب");
+  }
+
+  // ✅ تنظيف المكررات: يحذف النسخ الزائدة من Firebase ويحتفظ بالأحدث
+  const [cleaning, setCleaning] = useState(false);
+  async function removeDuplicates() {
+    const dups = duplicateCount;
+    if (dups === 0) { alert("ما في طلبات مكررة 👍"); return; }
+    if (!confirm("في " + dups + " طلب مكرر. سيتم حذف النسخ الزائدة والاحتفاظ بالأحدث لكل طلب. متأكد؟")) return;
+    setCleaning(true);
+
+    // نجمّع كل النسخ حسب الـ id
+    const groups = new Map();
+    for (const o of orders) {
+      if (!groups.has(o.id)) groups.set(o.id, []);
+      groups.get(o.id).push(o);
+    }
+
+    const keep = [];
+    let deleted = 0;
+    for (const [id, copies] of groups) {
+      if (copies.length === 1) { keep.push(copies[0]); continue; }
+      // نرتب: الأحدث أول (حسب updatedAt ثم createdAtISO)
+      copies.sort((a,b) => {
+        const tA = new Date(a.updatedAt||a.createdAtISO||a.createdAt||0).getTime();
+        const tB = new Date(b.updatedAt||b.createdAtISO||b.createdAt||0).getTime();
+        return tB - tA;
+      });
+      keep.push(copies[0]); // نحتفظ بالأحدث
+      // نحذف الباقي من Firebase
+      for (let i = 1; i < copies.length; i++) {
+        if (copies[i].firebaseId) {
+          try { await deleteDoc(doc(db,"orders",copies[i].firebaseId)); deleted++; } catch{}
+        }
+      }
+    }
+
+    setOrders(keep);
+    setCleaning(false);
+    alert("تم حذف " + deleted + " نسخة مكررة ✅");
   }
 
   // ✅ نسخة احتياطية: تصدير كل الطلبات لملف JSON
@@ -494,6 +565,14 @@ function MainApp({C, darkMode, setDarkMode}) {
           ))}
         </div>
 
+        {/* ✅ تنبيه المكررات */}
+        {duplicateCount>0 && (
+          <div style={{background:C.redBg,border:`1px solid ${C.red}`,borderRadius:12,padding:"12px 16px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+            <span style={{color:C.red,fontWeight:800,fontSize:14}}>⚠️ في {duplicateCount} طلب مكرر — يسبب مشاكل بالحالات</span>
+            <button style={{background:C.red,color:"#fff",border:0,borderRadius:8,padding:"7px 16px",cursor:cleaning?"wait":"pointer",fontWeight:800,fontFamily:"Cairo,inherit",fontSize:13,opacity:cleaning?0.6:1}} onClick={removeDuplicates} disabled={cleaning}>{cleaning?"جاري التنظيف...":"🧹 تنظيف الآن"}</button>
+          </div>
+        )}
+
         {/* ── Search + Filter ── */}
         <input style={{...inp,marginBottom:12,padding:"12px 16px",fontSize:14}} placeholder="بحث باسم الزبون أو الرقم أو الطلب أو اللون..." value={search} onChange={e=>setSearch(e.target.value)}/>
         <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:20}}>
@@ -595,6 +674,7 @@ function MainApp({C, darkMode, setDarkMode}) {
             <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
               <button style={{background:C.accent,color:"#fff",border:0,borderRadius:8,padding:"9px 16px",cursor:"pointer",fontWeight:800,fontFamily:"Cairo,inherit",fontSize:13}} onClick={exportCustomersPDF}>تحميل قائمة الزبائن PDF</button>
               <button style={{background:C.yellowBg,color:C.yellow,border:`1px solid ${C.yellow}`,borderRadius:8,padding:"9px 16px",cursor:fixing?"wait":"pointer",fontWeight:800,fontFamily:"Cairo,inherit",fontSize:13,opacity:fixing?0.6:1}} onClick={fixAllStatuses} disabled={fixing}>{fixing?"⚙️ جاري الإصلاح...":"🔧 إصلاح حالات الطلبات"}</button>
+              <button style={{background:duplicateCount>0?C.redBg:C.surface2,color:duplicateCount>0?C.red:C.textMuted,border:`1px solid ${duplicateCount>0?C.red:C.border}`,borderRadius:8,padding:"9px 16px",cursor:cleaning?"wait":"pointer",fontWeight:800,fontFamily:"Cairo,inherit",fontSize:13,opacity:cleaning?0.6:1}} onClick={removeDuplicates} disabled={cleaning}>{cleaning?"⚙️ جاري التنظيف...":`🧹 حذف المكررات${duplicateCount>0?` (${duplicateCount})`:""}`}</button>
             </div>
 
             <div style={{borderTop:`1px solid ${C.border}`,paddingTop:16,marginTop:4}}>
