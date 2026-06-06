@@ -10,7 +10,6 @@ import {
   deleteDoc,
 } from "firebase/firestore";
 
-
 const DISCORD_WEBHOOK_URL = import.meta.env.VITE_DISCORD_WEBHOOK_URL || "";
 
 const DELIVERY_COMPANY = "الوسيط";
@@ -31,29 +30,6 @@ const defaultColors = [
 
 const defaultProducts = ["حافظة كيبل", "ميدالية", "مجسم 3D", "ستاند", "شعار", "قطعة خاصة"];
 const statuses = ["تحت التصميم", "تحت الطباعة", "جاهز", "قيد التوصيل", "مكتمل", "ملغي"];
-
-const defaultOrders = [
-  {
-    id: "O-5001",
-    status: "تحت الطباعة",
-    customer: { name: "احمد علي", phone: "07701234567", city: "بغداد", address: "المنصور" },
-    items: [
-      {
-        product: "حافظة كيبل",
-        entries: [
-          { name: "احمد", qty: 1, colorName: "أسود", colorCode: "#111827" },
-          { name: "علي", qty: 1, colorName: "أحمر", colorCode: "#dc2626" },
-        ],
-        notes: "قياس عادي",
-      },
-    ],
-    price: 35000,
-    deposit: 10000,
-    tracking: "TRK-8821",
-    notes: "",
-    createdAt: new Date().toLocaleString("ar-IQ"),
-  },
-];
 
 function loadData(key, fallback) {
   try {
@@ -83,8 +59,6 @@ function normalizePhone(phone) {
 
 function getIraqWhatsAppNumber(phone) {
   let digits = normalizePhone(phone);
-
-  // يقبل الصيغ: 0770..., 770..., 964770..., 00964770...
   if (digits.startsWith("00964")) digits = digits.slice(2);
   if (digits.startsWith("964")) return digits;
   if (digits.startsWith("0")) return `964${digits.slice(1)}`;
@@ -122,7 +96,6 @@ function getItemEntries(item) {
   return [];
 }
 
-
 function parseOrderDate(order) {
   const value = order.createdAtISO || order.createdAt;
   const date = new Date(value);
@@ -135,7 +108,6 @@ function formatMoney(value) {
 
 function formatOrderDate(dateString) {
   const date = new Date(dateString);
-
   return date.toLocaleString("en-GB", {
     timeZone: "Asia/Baghdad",
     year: "numeric",
@@ -149,7 +121,6 @@ function formatOrderDate(dateString) {
 
 function formatPhoneNumber(phone) {
   const arabicNums = "٠١٢٣٤٥٦٧٨٩";
-  
   let digits = String(phone)
     .split("")
     .map((c) => {
@@ -157,13 +128,10 @@ function formatPhoneNumber(phone) {
       return index > -1 ? index : c;
     })
     .join("");
-
   digits = normalizePhone(digits);
-
   if (digits.length === 11) {
     return `${digits.slice(0, 4)} ${digits.slice(4, 7)} ${digits.slice(7)}`;
   }
-
   return digits;
 }
 
@@ -177,41 +145,38 @@ function buildFormalWhatsAppMessage(order) {
     })
     .join("\n\n");
 
-return (
-  `السلام عليكم ورحمة الله وبركاته\n` +
-  `عندكم طلب من الطباعة ثلاثية الأبعاد من متجر نايت ستور.\n\n` +
-  `https://www.instagram.com/night_99q\n\n` +
-  `اسم الزبون: ${order.customer.name}\n` +
-  `رقم الهاتف: 964${order.customer.phone.replace(/^0/, "")}\n` +
-  `رقم الطلب: ${order.id}\n\n` +
-  `تفاصيل الطلب:\n${itemsText}\n\n` +
-  `مبلغ الطلب: ${formatMoney(order.price)}\n` +
-  `أجور التوصيل: ${formatMoney(DELIVERY_FEE)}\n\n` +
-  `شكراً لاختياركم نايت ستور.`
-);
+  return (
+    `السلام عليكم ورحمة الله وبركاته\n` +
+    `عندكم طلب من الطباعة ثلاثية الأبعاد من متجر نايت ستور.\n\n` +
+    `https://www.instagram.com/night_99q\n\n` +
+    `اسم الزبون: ${order.customer.name}\n` +
+    `رقم الهاتف: 964${order.customer.phone.replace(/^0/, "")}\n` +
+    `رقم الطلب: ${order.id}\n\n` +
+    `تفاصيل الطلب:\n${itemsText}\n\n` +
+    `مبلغ الطلب: ${formatMoney(order.price)}\n` +
+    `أجور التوصيل: ${formatMoney(DELIVERY_FEE)}\n\n` +
+    `شكراً لاختياركم نايت ستور.`
+  );
 }
 
 function invoiceHtml(order) {
-const rows = order.items.map((item, idx) => {
-  const entries = getItemEntries(item)
-    .map((e) => `<div>${e.name || "بدون اسم"} - العدد: ${e.qty}</div>`)
-    .join("");
+  const rows = order.items.map((item, idx) => {
+    const entries = getItemEntries(item)
+      .map((e) => `<div>${e.name || "بدون اسم"} - العدد: ${e.qty}</div>`)
+      .join("");
+    const imageHtml = item.image
+      ? `<img src="${item.image}" style="width:70px;height:70px;object-fit:cover;border-radius:8px;border:1px solid #cbd5e1;margin-top:6px;" />`
+      : "";
+    return `
+      <tr>
+        <td style="border:1px solid #cbd5e1;padding:10px;">${idx + 1}</td>
+        <td style="border:1px solid #cbd5e1;padding:10px;">${item.product}</td>
+        <td style="border:1px solid #cbd5e1;padding:10px;">${entries}${imageHtml}</td>
+      </tr>
+    `;
+  }).join("");
 
-  const imageHtml = item.image
-    ? `<img src="${item.image}" style="width:70px;height:70px;object-fit:cover;border-radius:8px;border:1px solid #cbd5e1;margin-top:6px;" />`
-    : "";
-
-  return `
-    <tr>
-      <td style="border:1px solid #cbd5e1;padding:10px;">${idx + 1}</td>
-      <td style="border:1px solid #cbd5e1;padding:10px;">${item.product}</td>
-      <td style="border:1px solid #cbd5e1;padding:10px;">
-        ${entries}
-        ${imageHtml}
-      </td>
-    </tr>
-  `;
-}).join("");
+  const totalWithDelivery = Number(order.price || 0) + DELIVERY_FEE;
 
   return `
     <div dir="rtl" style="font-family: Tahoma, Arial, sans-serif; padding: 28px; color: #111827; background: #ffffff; width: 760px; box-sizing: border-box;">
@@ -236,6 +201,7 @@ const rows = order.items.map((item, idx) => {
         <div><b>المتبقي:</b> ${formatMoney(Number(order.price || 0) - Number(order.deposit || 0))}</div>
         <div><b>أجور التوصيل:</b> ${formatMoney(DELIVERY_FEE)}</div>
         <div><b>شركة التوصيل:</b> ${DELIVERY_COMPANY}</div>
+        <div style="border-top:1px solid #cbd5e1; margin-top:8px; padding-top:8px; color:#0f6e56;"><b>السعر الكلي (مع التوصيل):</b> ${formatMoney(totalWithDelivery)}</div>
       </div>
       <p style="margin-top:20px; text-align:center; font-weight:bold;">شكراً لاختياركم متجر نايت ستور</p>
     </div>
@@ -269,59 +235,32 @@ export default function App() {
   const [authorized, setAuthorized] = useState(
     localStorage.getItem("site_auth") === "yes"
   );
-
   const [password, setPassword] = useState("");
 
   if (!authorized) {
     return (
-      <div
-        style={{
-          minHeight: "100vh",
-          display: "flex",
-          flexDirection: "column",
-          justifyContent: "center",
-          alignItems: "center",
-          gap: 15,
-        }}
-      >
+      <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 15 }}>
         <h2>ادخل رمز الدخول</h2>
-
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-
-        <button
-          onClick={() => {
-            if (password === SITE_PASSWORD) {
-              localStorage.setItem("site_auth", "yes");
-              setAuthorized(true);
-            } else {
-              alert("رمز غير صحيح");
-            }
-          }}
-        >
-          دخول
-        </button>
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+        <button onClick={() => {
+          if (password === SITE_PASSWORD) {
+            localStorage.setItem("site_auth", "yes");
+            setAuthorized(true);
+          } else {
+            alert("رمز غير صحيح");
+          }
+        }}>دخول</button>
       </div>
     );
   }
 
   const [page, setPage] = useState("orders");
   const [orders, setOrders] = useState([]);
-  const [colors, setColors] = useState(() =>
-    loadData("colors_v2", defaultColors)
-  );
-  const [products, setProducts] = useState(() =>
-    loadData("products_v1", defaultProducts)
-  );
+  const [colors, setColors] = useState(() => loadData("colors_v2", defaultColors));
+  const [products, setProducts] = useState(() => loadData("products_v1", defaultProducts));
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("الكل");
-  const [newColor, setNewColor] = useState({
-    name: "",
-    code: "#000000",
-  });
+  const [newColor, setNewColor] = useState({ name: "", code: "#000000" });
   const [newProduct, setNewProduct] = useState("");
   const [editingOrderId, setEditingOrderId] = useState(null);
 
@@ -337,18 +276,19 @@ export default function App() {
     notes: "",
   });
 
-useEffect(() => {
-  async function fetchOrders() {
-    const snapshot = await getDocs(collection(db, "orders"));
-    const data = snapshot.docs.map((d) => ({
-      firebaseId: d.id,
-      ...d.data(),
-    }));
-    setOrders(data);
-  }
-
-  fetchOrders();
-}, []);
+  // ✅ إصلاح: normalize الحالة عند الجلب من Firebase
+  useEffect(() => {
+    async function fetchOrders() {
+      const snapshot = await getDocs(collection(db, "orders"));
+      const data = snapshot.docs.map((d) => ({
+        firebaseId: d.id,
+        ...d.data(),
+        status: (d.data().status || DEFAULT_STATUS).trim(),
+      }));
+      setOrders(data);
+    }
+    fetchOrders();
+  }, []);
 
   const customers = useMemo(() => {
     const map = new Map();
@@ -364,39 +304,30 @@ useEffect(() => {
     return Array.from(map.values());
   }, [orders]);
 
-const filteredOrders = useMemo(() => {
-  const q = search.trim();
-
-  return [...orders]
-    .sort((a, b) => {
-      const numA = Number(a.id?.replace("O-", "") || 0);
-      const numB = Number(b.id?.replace("O-", "") || 0);
-      return numA - numB; // من الأصغر للأكبر
-    })
-    .filter((o) => {
-      const itemsText = o.items
-        .map((i) =>
-          `${i.product} ${getItemEntries(i)
-            .map((e) => `${e.name} ${e.colorName}`)
-            .join(" ")}`
-        )
-        .join(" ");
-
-      const text = `${o.id} ${o.status} ${o.customer.name} ${o.customer.phone} ${o.customer.city} ${itemsText}`;
-
-      const matchSearch = text.includes(q);
-      const matchStatus = statusFilter === "الكل" || o.status === statusFilter;
-
-      return matchSearch && matchStatus;
-    });
-}, [orders, search, statusFilter]);
-
+  // ✅ إصلاح الفلتر: مقارنة بعد trim()
+  const filteredOrders = useMemo(() => {
+    const q = search.trim();
+    return [...orders]
+      .sort((a, b) => {
+        const numA = Number(a.id?.replace("O-", "") || 0);
+        const numB = Number(b.id?.replace("O-", "") || 0);
+        return numA - numB;
+      })
+      .filter((o) => {
+        const itemsText = o.items
+          .map((i) => `${i.product} ${getItemEntries(i).map((e) => `${e.name} ${e.colorName}`).join(" ")}`)
+          .join(" ");
+        const text = `${o.id} ${o.status} ${o.customer.name} ${o.customer.phone} ${o.customer.city} ${itemsText}`;
+        const matchSearch = text.includes(q);
+        const matchStatus = statusFilter === "الكل" || o.status?.trim() === statusFilter.trim();
+        return matchSearch && matchStatus;
+      });
+  }, [orders, search, statusFilter]);
 
   const filteredCustomers = useMemo(() => {
     const q = search.trim();
     return customers.filter((c) => `${c.name} ${c.phone} ${c.city} ${c.address}`.includes(q));
   }, [customers, search]);
-
 
   const moneyStats = useMemo(() => {
     const now = new Date();
@@ -466,7 +397,7 @@ const filteredOrders = useMemo(() => {
     });
   }
 
-async function submitOrder() {
+  async function submitOrder() {
     if (!orderForm.customerName || !orderForm.phone || !orderForm.items[0]?.product) {
       return alert("اكتب اسم الزبون ورقم الهاتف وتفاصيل الطلب");
     }
@@ -499,22 +430,19 @@ async function submitOrder() {
       createdAtISO: oldOrder?.createdAtISO || new Date().toISOString(),
       updatedAt: new Date().toLocaleString("ar-IQ"),
     };
-if (editingOrderId) {
-  const oldOrderDoc = orders.find((o) => o.id === editingOrderId);
 
-  if (oldOrderDoc?.firebaseId) {
-    await updateDoc(doc(db, "orders", oldOrderDoc.firebaseId), savedOrder);
-  }
-
-  setOrders(orders.map((o) =>
-    o.id === editingOrderId
-      ? { ...savedOrder, firebaseId: oldOrderDoc?.firebaseId }
-      : o
-  ));
+    if (editingOrderId) {
+      const oldOrderDoc = orders.find((o) => o.id === editingOrderId);
+      if (oldOrderDoc?.firebaseId) {
+        await updateDoc(doc(db, "orders", oldOrderDoc.firebaseId), savedOrder);
+      }
+      setOrders(orders.map((o) =>
+        o.id === editingOrderId ? { ...savedOrder, firebaseId: oldOrderDoc?.firebaseId } : o
+      ));
       sendDiscord(`✏️ تم تعديل طلب\nرقم الطلب: ${savedOrder.id}\nالزبون: ${savedOrder.customer.name}`);
     } else {
       const docRef = await addDoc(collection(db, "orders"), savedOrder);
-setOrders([...orders, { ...savedOrder, firebaseId: docRef.id }]);
+      setOrders([...orders, { ...savedOrder, firebaseId: docRef.id }]);
       const itemsText = savedOrder.items.map((i, idx) => {
         const lines = getItemEntries(i).map((e, eIdx) => `   ${eIdx + 1}- الاسم: ${e.name} | العدد: ${e.qty} | اللون: ${e.colorName}`).join("\n");
         return `${idx + 1}) ${i.product}\n${lines}`;
@@ -531,6 +459,7 @@ setOrders([...orders, { ...savedOrder, firebaseId: docRef.id }]);
         `السعر: ${savedOrder.price.toLocaleString()} د.ع\n` +
         `العربون: ${savedOrder.deposit.toLocaleString()} د.ع\n` +
         `المتبقي: ${(savedOrder.price - savedOrder.deposit).toLocaleString()} د.ع\n` +
+        `السعر الكلي (مع التوصيل): ${(savedOrder.price + DELIVERY_FEE).toLocaleString()} د.ع\n` +
         `شركة التوصيل: ${DELIVERY_COMPANY}\n` +
         `أجرة التوصيل: ${DELIVERY_FEE.toLocaleString()} د.ع\n` +
         `ملاحظات: ${savedOrder.notes || "لا يوجد"}`
@@ -600,35 +529,26 @@ setOrders([...orders, { ...savedOrder, firebaseId: docRef.id }]);
         </table>
       </div>
     `;
-
     downloadHtmlAsPDF(html, "customers-report-night-store.pdf");
   }
 
-async function updateOrderStatus(orderId, status) {
-  const oldOrder = orders.find((o) => o.id === orderId);
-
-  if (oldOrder?.firebaseId) {
-    await updateDoc(doc(db, "orders", oldOrder.firebaseId), { status });
+  async function updateOrderStatus(orderId, status) {
+    const oldOrder = orders.find((o) => o.id === orderId);
+    if (oldOrder?.firebaseId) {
+      await updateDoc(doc(db, "orders", oldOrder.firebaseId), { status });
+    }
+    setOrders(orders.map((o) => o.id === orderId ? { ...o, status } : o));
+    sendDiscord(`🔄 تحديث حالة طلب\nرقم الطلب: ${orderId}\nالزبون: ${oldOrder?.customer.name || ""}\nالحالة الجديدة: ${status}`);
   }
 
-  setOrders(orders.map((o) =>
-    o.id === orderId ? { ...o, status } : o
-  ));
-
-  sendDiscord(`🔄 تحديث حالة طلب\nرقم الطلب: ${orderId}\nالزبون: ${oldOrder?.customer.name || ""}\nالحالة الجديدة: ${status}`);
-}
-
-async function deleteOrder(orderId) {
-  if (!confirm("متأكد تريد حذف الطلب؟")) return;
-
-  const oldOrder = orders.find((o) => o.id === orderId);
-
-  if (oldOrder?.firebaseId) {
-    await deleteDoc(doc(db, "orders", oldOrder.firebaseId));
+  async function deleteOrder(orderId) {
+    if (!confirm("متأكد تريد حذف الطلب؟")) return;
+    const oldOrder = orders.find((o) => o.id === orderId);
+    if (oldOrder?.firebaseId) {
+      await deleteDoc(doc(db, "orders", oldOrder.firebaseId));
+    }
+    setOrders(orders.filter((o) => o.id !== orderId));
   }
-
-  setOrders(orders.filter((o) => o.id !== orderId));
-}
 
   function addColor() {
     const name = newColor.name.trim();
@@ -691,18 +611,21 @@ async function deleteOrder(orderId) {
       <input style={styles.search} placeholder="بحث باسم الزبون أو الرقم أو الطلب أو اللون..." value={search} onChange={(e) => setSearch(e.target.value)} />
 
       <div style={{ ...styles.buttons, marginTop: 12 }}>
-  {["الكل", ...statuses].map((s) => (
-    <button
-      key={s}
-      style={statusFilter === s ? styles.activeButton : styles.button}
-      onClick={() => setStatusFilter(s)}
-    >
-      {s}
-    </button>
-  ))}
-</div>
+        {["الكل", ...statuses].map((s) => (
+          <button key={s} style={statusFilter === s ? styles.activeButton : styles.button} onClick={() => setStatusFilter(s)}>
+            {s}
+          </button>
+        ))}
+      </div>
 
-      {page === "orders" && <div style={styles.grid}>{filteredOrders.map((o) => <OrderCard key={o.id} order={o} updateOrderStatus={updateOrderStatus} deleteOrder={deleteOrder} startEditOrder={startEditOrder} />)}</div>}
+      {page === "orders" && (
+        <div style={styles.grid}>
+          {filteredOrders.map((o) => (
+            <OrderCard key={o.id} order={o} updateOrderStatus={updateOrderStatus} deleteOrder={deleteOrder} startEditOrder={startEditOrder} />
+          ))}
+        </div>
+      )}
+
       {page === "customers" && (
         <>
           <div style={styles.exportRow}><button style={styles.primaryButton} onClick={exportCustomersPDF}>تحميل قائمة الزبائن PDF</button></div>
@@ -732,7 +655,6 @@ async function deleteOrder(orderId) {
           <div style={styles.colorList}>{products.map((p) => <span key={p} style={styles.productChip}>{p}<button style={styles.xButton} onClick={() => deleteProduct(p)}>×</button></span>)}</div>
         </div>
       )}
-
 
       {page === "reports" && (
         <div style={styles.form}>
@@ -782,7 +704,6 @@ async function deleteOrder(orderId) {
                 <h3 style={styles.itemTitle}>منتج رقم {index + 1}</h3>
                 {orderForm.items.length > 1 && <button style={styles.deleteSmall} onClick={() => removeItem(index)}>حذف المنتج</button>}
               </div>
-
               <label style={styles.label}>المنتج
                 <select style={styles.input} value={item.product} onChange={(e) => updateItem(index, { product: e.target.value })}>
                   {products.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -790,59 +711,32 @@ async function deleteOrder(orderId) {
               </label>
 
               {item.product === "قطعة خاصة" && (
-    <div style={styles.imageBox}>
-    <label style={styles.label}>صورة القطعة الخاصة</label>
-
-    <input
-      style={styles.input}
-      type="file"
-      accept="image/*"
-      onChange={(e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-
-  const reader = new FileReader(); // ✅ مهم
-  const canvas = document.createElement("canvas");
-  const img = new Image();
-
-  reader.onload = () => {
-    img.src = reader.result;
-  };
-
-  img.onload = () => {
-    const MAX = 600;
-    let width = img.width;
-    let height = img.height;
-
-    if (width > MAX) {
-      height *= MAX / width;
-      width = MAX;
-    }
-
-    canvas.width = width;
-    canvas.height = height;
-
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(img, 0, 0, width, height);
-
-    const compressed = canvas.toDataURL("image/jpeg", 0.7);
-    updateItem(index, { image: compressed });
-  };
-
-  reader.readAsDataURL(file);
-}}
-
-    />
-
-    {item.image && (
-      <img
-        src={item.image}
-        alt="صورة القطعة"
-        style={styles.previewImage}
-      />
-    )}
-  </div>
-)}
+                <div style={styles.imageBox}>
+                  <label style={styles.label}>صورة القطعة الخاصة</label>
+                  <input style={styles.input} type="file" accept="image/*" onChange={(e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    const canvas = document.createElement("canvas");
+                    const img = new Image();
+                    reader.onload = () => { img.src = reader.result; };
+                    img.onload = () => {
+                      const MAX = 600;
+                      let width = img.width;
+                      let height = img.height;
+                      if (width > MAX) { height *= MAX / width; width = MAX; }
+                      canvas.width = width;
+                      canvas.height = height;
+                      const ctx = canvas.getContext("2d");
+                      ctx.drawImage(img, 0, 0, width, height);
+                      const compressed = canvas.toDataURL("image/jpeg", 0.7);
+                      updateItem(index, { image: compressed });
+                    };
+                    reader.readAsDataURL(file);
+                  }} />
+                  {item.image && <img src={item.image} alt="صورة القطعة" style={styles.previewImage} />}
+                </div>
+              )}
 
               <div style={styles.namesBox}>
                 <b>الأسماء على المنتج — لكل اسم لون وعدد خاص</b>
@@ -862,7 +756,6 @@ async function deleteOrder(orderId) {
                 ))}
                 <button style={styles.smallBlue} onClick={() => addEntryToItem(index)}>+ إضافة اسم ثاني</button>
               </div>
-
               <Input label="ملاحظات المنتج" value={item.notes} onChange={(v) => updateItem(index, { notes: v })} />
             </div>
           ))}
@@ -874,7 +767,9 @@ async function deleteOrder(orderId) {
           <Input label="العربون" type="number" value={orderForm.deposit} onChange={(v) => setOrderForm({ ...orderForm, deposit: v })} />
           <Input label="رقم تتبع الوسيط / اختياري" value={orderForm.tracking} onChange={(v) => setOrderForm({ ...orderForm, tracking: v })} />
           <Input label="ملاحظات عامة" value={orderForm.notes} onChange={(v) => setOrderForm({ ...orderForm, notes: v })} />
-          <div style={styles.deliveryBox}>شركة التوصيل ثابتة: <b>{DELIVERY_COMPANY}</b> — أجرة التوصيل: <b>{DELIVERY_FEE.toLocaleString()} د.ع</b></div>
+          <div style={styles.deliveryBox}>
+            شركة التوصيل ثابتة: <b>{DELIVERY_COMPANY}</b> — أجرة التوصيل: <b>{DELIVERY_FEE.toLocaleString()} د.ع</b>
+          </div>
           <div style={styles.buttons}>
             <button style={styles.saveButton} onClick={submitOrder}>{editingOrderId ? "حفظ التعديل" : "حفظ الطلب"}</button>
             {editingOrderId && <button style={styles.button} onClick={resetOrderForm}>إلغاء التعديل</button>}
@@ -902,78 +797,116 @@ function ColorChip({ color, onDelete }) {
   return <span style={{ ...styles.colorChip, borderColor: border }}><span style={{ ...styles.colorDot, background: color.code }} />{color.name}<button style={styles.xButton} onClick={onDelete}>×</button></span>;
 }
 
+// ✅ OrderCard محسّن: تصميم جديد + السعر الكلي
 function OrderCard({ order, updateOrderStatus, deleteOrder, startEditOrder }) {
-  const whatsappMessage = buildFormalWhatsAppMessage(order);
+  const whatsappLink = makeWhatsAppLink(order.customer.phone, buildFormalWhatsAppMessage(order));
 
-  const whatsappLink = makeWhatsAppLink(order.customer.phone, whatsappMessage);
+  const badgeStyle = {
+    "تحت التصميم": { background: "#E6F1FB", color: "#0C447C" },
+    "تحت الطباعة": { background: "#FAEEDA", color: "#633806" },
+    "جاهز":         { background: "#EAF3DE", color: "#27500A" },
+    "قيد التوصيل":  { background: "#EEEDFE", color: "#3C3489" },
+    "مكتمل":        { background: "#E1F5EE", color: "#085041" },
+    "ملغي":         { background: "#FCEBEB", color: "#791F1F" },
+  };
+
+  const bs = badgeStyle[order.status] || { background: "#F1EFE8", color: "#5F5E5A" };
+  const totalWithDelivery = Number(order.price || 0) + DELIVERY_FEE;
 
   return (
     <div style={styles.card}>
       <div style={styles.row}>
-        <b style={styles.orderId}>{order.id}</b>
-        <span style={styles.badge}>{order.status}</span>
+        <span style={{ fontSize: 13, color: "#64748b", fontWeight: 600 }}>{order.id}</span>
+        <span style={{ ...bs, borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>
+          {order.status}
+        </span>
       </div>
 
-      <h2 style={styles.cardTitle}>{order.items.map((i) => i.product).join(" + ")}</h2>
+      <h2 style={{ fontSize: 17, margin: "10px 0 8px", fontWeight: 700 }}>
+        {order.items.map((i) => i.product).join(" + ")}
+      </h2>
 
       {order.items.map((item, idx) => (
-        <div key={idx} style={styles.orderItemLine}>
-          <b>
+        <div key={idx} style={{ background: "#f8fafc", border: "0.5px solid #e2e8f0", borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
+          <p style={{ fontSize: 13, color: "#64748b", fontWeight: 600, marginBottom: 6 }}>
             {idx + 1}. {item.product}
-          </b>
+          </p>
           {getItemEntries(item).map((entry, eIdx) => (
-            <div key={eIdx} style={styles.orderEntryLine}>
-              الاسم: <b>{entry.name || "بدون اسم"}</b> — العدد: <b>{entry.qty}</b> — اللون:{" "}
-              <span style={{ ...styles.colorDotSmall, background: entry.colorCode }} />{" "}
-              <b>{entry.colorName}</b>
+            <div key={eIdx} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, padding: "5px 0", borderBottom: eIdx < getItemEntries(item).length - 1 ? "0.5px solid #e2e8f0" : "none" }}>
+              <span style={{ width: 12, height: 12, borderRadius: "50%", background: entry.colorCode, border: "0.5px solid #94a3b8", flexShrink: 0, display: "inline-block" }} />
+              <b style={{ flex: 1 }}>{entry.name || "بدون اسم"}</b>
+              <span style={{ color: "#64748b", fontSize: 12 }}>العدد: {entry.qty} · {entry.colorName}</span>
             </div>
           ))}
-          {item.notes && <div>ملاحظات المنتج: {item.notes}</div>}
+          {item.notes && <p style={{ fontSize: 12, color: "#94a3b8", marginTop: 6 }}>{item.notes}</p>}
           {item.image && (
-  <img
-    src={item.image}
-    alt="صورة القطعة"
-    style={{
-      width: "100%",
-      maxHeight: 220,
-      objectFit: "cover",
-      marginTop: 10,
-      borderRadius: 10,
-      border: "1px solid #cbd5e1"
-    }}
-  />
-)}
+            <img src={item.image} alt="صورة القطعة" style={{ width: "100%", maxHeight: 200, objectFit: "cover", borderRadius: 8, marginTop: 8, border: "0.5px solid #e2e8f0" }} />
+          )}
         </div>
       ))}
 
-      <p>
-  <b>الزبون:</b> {order.customer.name} -{" "}
-  {formatPhoneNumber(order.customer.phone)}
-</p>
-      <p>
-  <b>تاريخ الطلب:</b>{" "}
-  {formatOrderDate(order.createdAtISO || order.createdAt)}
-</p>
-      <p><b>العنوان:</b> {order.customer.city} / {order.customer.address}</p>
-      <p><b>السعر:</b> {order.price.toLocaleString()} د.ع | <b>العربون:</b> {order.deposit.toLocaleString()} د.ع | <b>المتبقي:</b> {(order.price - order.deposit).toLocaleString()} د.ع</p>
-      <p><b>التوصيل:</b> {DELIVERY_COMPANY} | <b>أجرة التوصيل:</b> {DELIVERY_FEE.toLocaleString()} د.ع | <b>التتبع:</b> {order.tracking || "لا يوجد"}</p>
-      <p><b>ملاحظات:</b> {order.notes || "لا يوجد"}</p>
+      <hr style={{ border: "none", borderTop: "0.5px solid #e2e8f0", margin: "12px 0" }} />
 
-      <div style={{ ...styles.buttons, marginTop: 10 }}>
-        <a href={whatsappLink} target="_blank" rel="noreferrer" style={styles.whatsappSend}>📱 إرسال للواتساب</a>
-        <button style={styles.invoiceButton} onClick={() => downloadInvoicePDF(order)}>🧾 تحميل فاتورة PDF</button>
-      </div>
-
-      <div style={styles.buttons}>
-        {statuses.map((s) => (
-          <button style={order.status === s ? styles.statusActive : styles.smallButton} key={s} onClick={() => updateOrderStatus(order.id, s)}>
-            {s}
-          </button>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12, fontSize: 13 }}>
+        {[
+          ["الزبون", `${order.customer.name} · ${formatPhoneNumber(order.customer.phone)}`],
+          ["العنوان", `${order.customer.city} / ${order.customer.address}`],
+          ["تاريخ الطلب", formatOrderDate(order.createdAtISO || order.createdAt)],
+          ["التتبع", order.tracking || "لا يوجد"],
+        ].map(([label, value]) => (
+          <div key={label}>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 2 }}>{label}</div>
+            <div style={{ fontWeight: 600 }}>{value}</div>
+          </div>
         ))}
       </div>
-      <div style={styles.buttons}>
-        <button style={styles.primaryButton} onClick={() => startEditOrder(order)}>تعديل الطلب</button>
-        <button style={styles.deleteSmall} onClick={() => deleteOrder(order.id)}>حذف الطلب</button>
+
+      {/* ✅ قسم المبالغ مع السعر الكلي */}
+      <div style={{ display: "flex", gap: 12, background: "#f8fafc", borderRadius: 10, padding: "10px 14px", marginBottom: 12, flexWrap: "wrap" }}>
+        {[
+          ["السعر", formatMoney(order.price), null],
+          ["العربون", formatMoney(order.deposit), null],
+          ["المتبقي", formatMoney(Number(order.price) - Number(order.deposit)), "#185FA5"],
+          ["التوصيل", formatMoney(DELIVERY_FEE), null],
+          ["السعر الكلي", formatMoney(totalWithDelivery), "#0F6E56"],
+        ].map(([label, value, color]) => (
+          <div key={label} style={label === "السعر الكلي" ? { borderRight: "1.5px solid #e2e8f0", paddingRight: 12 } : {}}>
+            <div style={{ fontSize: 11, color: "#94a3b8" }}>{label}</div>
+            <div style={{ fontSize: label === "السعر الكلي" ? 15 : 14, fontWeight: label === "السعر الكلي" ? 800 : 700, color: color || "inherit" }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+        <a href={whatsappLink} target="_blank" rel="noreferrer"
+          style={{ background: "#E1F5EE", border: "0.5px solid #5DCAA5", color: "#085041", borderRadius: 8, padding: "7px 12px", textDecoration: "none", fontSize: 13, fontWeight: 700 }}>
+          📱 واتساب
+        </a>
+        <button style={{ background: "#f1f5f9", border: "0.5px solid #e2e8f0", color: "#0f172a", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 13, fontWeight: 700 }}
+          onClick={() => downloadInvoicePDF(order)}>
+          🧾 فاتورة
+        </button>
+        <button style={{ background: "#E6F1FB", border: "0.5px solid #85B7EB", color: "#0C447C", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 13, fontWeight: 700 }}
+          onClick={() => startEditOrder(order)}>
+          ✏️ تعديل
+        </button>
+        <button style={{ background: "#FCEBEB", border: "0.5px solid #F09595", color: "#791F1F", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 13, fontWeight: 700 }}
+          onClick={() => deleteOrder(order.id)}>
+          🗑 حذف
+        </button>
+      </div>
+
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", paddingTop: 10, borderTop: "0.5px solid #e2e8f0" }}>
+        {statuses.map((s) => {
+          const active = order.status === s;
+          return (
+            <button key={s}
+              style={{ border: active ? "1.5px solid #5DCAA5" : "0.5px solid #e2e8f0", background: active ? "#E1F5EE" : "#f8fafc", color: active ? "#085041" : "#64748b", borderRadius: 999, padding: "5px 10px", fontSize: 11, cursor: "pointer", fontWeight: 700, fontFamily: "inherit" }}
+              onClick={() => updateOrderStatus(order.id, s)}>
+              {s}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -981,13 +914,18 @@ function OrderCard({ order, updateOrderStatus, deleteOrder, startEditOrder }) {
 
 function CustomerCard({ customer }) {
   const whatsapp = makeWhatsAppLink(customer.phone, `مرحبا ${customer.name}، عدنا عروض جديدة من متجر 3D`);
-  return <div style={styles.card}>
-    <div style={styles.row}><b>{customer.name}</b><a style={styles.whatsapp} href={whatsapp} target="_blank" rel="noreferrer">واتساب</a></div>
-    <p><b>الهاتف:</b> {customer.phone}</p>
-    <p><b>العنوان:</b> {customer.city} / {customer.address}</p>
-    <p><b>عدد الطلبات:</b> {customer.count}</p>
-    <p><b>إجمالي الشراء:</b> {customer.total.toLocaleString()} د.ع</p>
-  </div>;
+  return (
+    <div style={styles.card}>
+      <div style={styles.row}>
+        <b>{customer.name}</b>
+        <a style={styles.whatsapp} href={whatsapp} target="_blank" rel="noreferrer">واتساب</a>
+      </div>
+      <p><b>الهاتف:</b> {customer.phone}</p>
+      <p><b>العنوان:</b> {customer.city} / {customer.address}</p>
+      <p><b>عدد الطلبات:</b> {customer.count}</p>
+      <p><b>إجمالي الشراء:</b> {customer.total.toLocaleString()} د.ع</p>
+    </div>
+  );
 }
 
 const styles = {
@@ -1046,21 +984,6 @@ const styles = {
   entryColor: { background: "white", border: "1px solid #e2e8f0", borderRadius: 12, padding: 10, display: "flex", gap: 8, alignItems: "center", fontWeight: 800 },
   orderItemLine: { background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: 10, margin: "8px 0" },
   orderEntryLine: { marginTop: 8, paddingTop: 8, borderTop: "1px solid #e2e8f0" },
-
-  imageBox: {
-    display: "grid",
-    gap: 10,
-    background: "#ffffff",
-    border: "1px dashed #94a3b8",
-    borderRadius: 14,
-    padding: 12,
-  },
-
-  previewImage: {
-    width: 160,
-    maxHeight: 160,
-    objectFit: "cover",
-    borderRadius: 12,
-    border: "1px solid #cbd5e1",
-  },
+  imageBox: { display: "grid", gap: 10, background: "#ffffff", border: "1px dashed #94a3b8", borderRadius: 14, padding: 12 },
+  previewImage: { width: 160, maxHeight: 160, objectFit: "cover", borderRadius: 12, border: "1px solid #cbd5e1" },
 };
