@@ -1,989 +1,572 @@
 import React, { useEffect, useMemo, useState } from "react";
 import html2pdf from "html2pdf.js/dist/html2pdf.bundle.min.js";
 import { db } from "./firebase";
-import {
-  collection,
-  addDoc,
-  getDocs,
-  doc,
-  updateDoc,
-  deleteDoc,
-} from "firebase/firestore";
+import { collection, addDoc, getDocs, doc, updateDoc, deleteDoc } from "firebase/firestore";
 
 const DISCORD_WEBHOOK_URL = import.meta.env.VITE_DISCORD_WEBHOOK_URL || "";
-
 const DELIVERY_COMPANY = "الوسيط";
 const DELIVERY_FEE = 5000;
 const DEFAULT_STATUS = "تحت التصميم";
 
-const provinces = [
-  "بغداد", "البصرة", "نينوى", "أربيل", "النجف", "كربلاء", "السليمانية", "دهوك", "كركوك", "ديالى", "الأنبار", "بابل", "واسط", "صلاح الدين", "الديوانية", "ذي قار", "ميسان", "المثنى"
-];
+const provinces = ["بغداد","البصرة","نينوى","أربيل","النجف","كربلاء","السليمانية","دهوك","كركوك","ديالى","الأنبار","بابل","واسط","صلاح الدين","الديوانية","ذي قار","ميسان","المثنى"];
+const defaultColors = [{name:"أسود",code:"#111827"},{name:"أبيض",code:"#ffffff"},{name:"أحمر",code:"#dc2626"},{name:"أزرق",code:"#2563eb"},{name:"أخضر",code:"#16a34a"}];
+const defaultProducts = ["حافظة كيبل","ميدالية","مجسم 3D","ستاند","شعار","قطعة خاصة"];
+const statuses = ["تحت التصميم","تحت الطباعة","جاهز","قيد التوصيل","مكتمل","ملغي"];
 
-const defaultColors = [
-  { name: "أسود", code: "#111827" },
-  { name: "أبيض", code: "#ffffff" },
-  { name: "أحمر", code: "#dc2626" },
-  { name: "أزرق", code: "#2563eb" },
-  { name: "أخضر", code: "#16a34a" },
-];
+const STATUS_STYLE = {
+  "تحت التصميم": { bg:"#0c2040", color:"#60a5fa", dot:"#3b82f6" },
+  "تحت الطباعة": { bg:"#2a1d00", color:"#fbbf24", dot:"#f59e0b" },
+  "جاهز":        { bg:"#0a2015", color:"#34d399", dot:"#10b981" },
+  "قيد التوصيل": { bg:"#1e0f35", color:"#c084fc", dot:"#a855f7" },
+  "مكتمل":       { bg:"#052020", color:"#2dd4bf", dot:"#14b8a6" },
+  "ملغي":        { bg:"#250a0a", color:"#f87171", dot:"#ef4444" },
+};
 
-const defaultProducts = ["حافظة كيبل", "ميدالية", "مجسم 3D", "ستاند", "شعار", "قطعة خاصة"];
-const statuses = ["تحت التصميم", "تحت الطباعة", "جاهز", "قيد التوصيل", "مكتمل", "ملغي"];
+const D = {
+  bg:"#0d1117", surface:"#161b22", surface2:"#21262d",
+  border:"#30363d", border2:"#3d4451",
+  text:"#e6edf3", textMuted:"#8b949e", textDim:"#484f58",
+  accent:"#58a6ff", accentBg:"#0c2d6b",
+  green:"#3fb950", greenBg:"#0d2818",
+  red:"#f85149", redBg:"#250a0a",
+};
 
 function loadData(key, fallback) {
   try {
-    const saved = localStorage.getItem(key);
-    return saved ? JSON.parse(saved) : fallback;
-  } catch {
-    return fallback;
-  }
+    const s = localStorage.getItem(key);
+    if (s) { const p = JSON.parse(s); if (Array.isArray(p) && p.length > 0) return p; }
+  } catch {}
+  return fallback;
 }
+function saveData(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} }
 
-async function sendDiscord(message) {
+async function sendDiscord(msg) {
   if (!DISCORD_WEBHOOK_URL) return;
-  try {
-    await fetch(DISCORD_WEBHOOK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: message }),
-    });
-  } catch (error) {
-    console.error("Discord webhook error:", error);
-  }
+  try { await fetch(DISCORD_WEBHOOK_URL, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({content:msg}) }); } catch {}
 }
 
-function normalizePhone(phone) {
-  return String(phone || "").replace(/\D/g, "").trim();
+function normalizePhone(p) { return String(p||"").replace(/\D/g,"").trim(); }
+function getIraqWA(phone) {
+  let d = normalizePhone(phone);
+  if (d.startsWith("00964")) d = d.slice(2);
+  if (d.startsWith("964")) return d;
+  if (d.startsWith("0")) return `964${d.slice(1)}`;
+  return `964${d}`;
 }
-
-function getIraqWhatsAppNumber(phone) {
-  let digits = normalizePhone(phone);
-  if (digits.startsWith("00964")) digits = digits.slice(2);
-  if (digits.startsWith("964")) return digits;
-  if (digits.startsWith("0")) return `964${digits.slice(1)}`;
-  return `964${digits}`;
-}
-
-function makeWhatsAppLink(phone, message) {
-  return `https://wa.me/${getIraqWhatsAppNumber(phone)}?text=${encodeURIComponent(message)}`;
-}
-
-function emptyEntry(colors) {
-  const firstColor = colors[0] || { name: "", code: "#000000" };
-  return { name: "", qty: 1, colorName: firstColor.name, colorCode: firstColor.code };
-}
-
-function emptyItem(colors, products) {
-  return {
-    product: products[0] || "حافظة كيبل",
-    entries: [emptyEntry(colors)],
-    notes: "",
-    image: null,
-  };
-}
-
+function makeWALink(phone, msg) { return `https://wa.me/${getIraqWA(phone)}?text=${encodeURIComponent(msg)}`; }
+function emptyEntry(colors) { const c=colors[0]||{name:"",code:"#000"}; return {name:"",qty:1,colorName:c.name,colorCode:c.code}; }
+function emptyItem(colors, products) { return {product:products[0]||"حافظة كيبل",entries:[emptyEntry(colors)],notes:"",image:null}; }
 function getItemEntries(item) {
   if (item.entries) return item.entries;
-  if (item.names) {
-    return item.names.map((name) => ({
-      name,
-      qty: item.qty || 1,
-      colorName: item.colorName || "",
-      colorCode: item.colorCode || "#000000",
-    }));
-  }
+  if (item.names) return item.names.map(n=>({name:n,qty:item.qty||1,colorName:item.colorName||"",colorCode:item.colorCode||"#000"}));
   return [];
 }
-
-function parseOrderDate(order) {
-  const value = order.createdAtISO || order.createdAt;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? new Date() : date;
+function parseOrderDate(o) { const d=new Date(o.createdAtISO||o.createdAt); return isNaN(d)?new Date():d; }
+function fmt(v) { return `${Number(v||0).toLocaleString()} د.ع`; }
+function fmtDate(s) {
+  return new Date(s).toLocaleString("en-GB",{timeZone:"Asia/Baghdad",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:true});
+}
+function fmtPhone(phone) {
+  const ar="٠١٢٣٤٥٦٧٨٩";
+  let d=String(phone).split("").map(c=>{const i=ar.indexOf(c);return i>-1?i:c;}).join("");
+  d=normalizePhone(d);
+  return d.length===11?`${d.slice(0,4)} ${d.slice(4,7)} ${d.slice(7)}`:d;
 }
 
-function formatMoney(value) {
-  return `${Number(value || 0).toLocaleString()} د.ع`;
-}
-
-function formatOrderDate(dateString) {
-  const date = new Date(dateString);
-  return date.toLocaleString("en-GB", {
-    timeZone: "Asia/Baghdad",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-  });
-}
-
-function formatPhoneNumber(phone) {
-  const arabicNums = "٠١٢٣٤٥٦٧٨٩";
-  let digits = String(phone)
-    .split("")
-    .map((c) => {
-      const index = arabicNums.indexOf(c);
-      return index > -1 ? index : c;
-    })
-    .join("");
-  digits = normalizePhone(digits);
-  if (digits.length === 11) {
-    return `${digits.slice(0, 4)} ${digits.slice(4, 7)} ${digits.slice(7)}`;
-  }
-  return digits;
-}
-
-function buildFormalWhatsAppMessage(order) {
-  const itemsText = order.items
-    .map((item, idx) => {
-      const entries = getItemEntries(item)
-        .map((e) => `- ${e.name || "بدون اسم"} | العدد: ${e.qty}`)
-        .join("\n");
-      return `${idx + 1}) ${item.product}\n${entries}`;
-    })
-    .join("\n\n");
-
-  return (
-    `السلام عليكم ورحمة الله وبركاته\n` +
-    `عندكم طلب من الطباعة ثلاثية الأبعاد من متجر نايت ستور.\n\n` +
-    `https://www.instagram.com/night_99q\n\n` +
-    `اسم الزبون: ${order.customer.name}\n` +
-    `رقم الهاتف: 964${order.customer.phone.replace(/^0/, "")}\n` +
-    `رقم الطلب: ${order.id}\n\n` +
-    `تفاصيل الطلب:\n${itemsText}\n\n` +
-    `مبلغ الطلب: ${formatMoney(order.price)}\n` +
-    `أجور التوصيل: ${formatMoney(DELIVERY_FEE)}\n\n` +
-    `شكراً لاختياركم نايت ستور.`
-  );
+function buildWAMsg(order) {
+  const items = order.items.map((item,i)=>{
+    const lines = getItemEntries(item).map(e=>`- ${e.name||"بدون اسم"} | العدد: ${e.qty}`).join("\n");
+    return `${i+1}) ${item.product}\n${lines}`;
+  }).join("\n\n");
+  return `السلام عليكم ورحمة الله وبركاته\nعندكم طلب من الطباعة ثلاثية الأبعاد من متجر نايت ستور.\n\nhttps://www.instagram.com/night_99q\n\nاسم الزبون: ${order.customer.name}\nرقم الهاتف: 964${order.customer.phone.replace(/^0/,"")}\nرقم الطلب: ${order.id}\n\nتفاصيل الطلب:\n${items}\n\nمبلغ الطلب: ${fmt(order.price)}\nأجور التوصيل: ${fmt(DELIVERY_FEE)}\n\nشكراً لاختياركم نايت ستور.`;
 }
 
 function invoiceHtml(order) {
-  const rows = order.items.map((item, idx) => {
-    const entries = getItemEntries(item)
-      .map((e) => `<div>${e.name || "بدون اسم"} - العدد: ${e.qty}</div>`)
-      .join("");
-    const imageHtml = item.image
-      ? `<img src="${item.image}" style="width:70px;height:70px;object-fit:cover;border-radius:8px;border:1px solid #cbd5e1;margin-top:6px;" />`
-      : "";
-    return `
-      <tr>
-        <td style="border:1px solid #cbd5e1;padding:10px;">${idx + 1}</td>
-        <td style="border:1px solid #cbd5e1;padding:10px;">${item.product}</td>
-        <td style="border:1px solid #cbd5e1;padding:10px;">${entries}${imageHtml}</td>
-      </tr>
-    `;
+  const rows = order.items.map((item,i)=>{
+    const entries = getItemEntries(item).map(e=>`<div>${e.name||"بدون اسم"} - العدد: ${e.qty}</div>`).join("");
+    const img = item.image?`<img src="${item.image}" style="width:70px;height:70px;object-fit:cover;border-radius:8px;border:1px solid #cbd5e1;margin-top:6px;"/>`:"";
+    return `<tr><td style="border:1px solid #cbd5e1;padding:10px;">${i+1}</td><td style="border:1px solid #cbd5e1;padding:10px;">${item.product}</td><td style="border:1px solid #cbd5e1;padding:10px;">${entries}${img}</td></tr>`;
   }).join("");
-
-  const totalWithDelivery = Number(order.price || 0) + DELIVERY_FEE;
-
-  return `
-    <div dir="rtl" style="font-family: Tahoma, Arial, sans-serif; padding: 28px; color: #111827; background: #ffffff; width: 760px; box-sizing: border-box;">
-      <div style="border-bottom:2px solid #111827; padding-bottom:14px; margin-bottom:18px;">
-        <h1 style="margin:0; font-size:28px;">فاتورة طلب</h1>
-        <p style="margin:6px 0 0; font-size:16px;">متجر نايت ستور - الطباعة ثلاثية الأبعاد</p>
-        <p style="margin:6px 0 0;"><b>رقم الطلب:</b> ${order.id}</p>
-      </div>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:16px; font-size:15px;">
-        <div><b>اسم الزبون:</b> ${order.customer.name || ""}</div>
-        <div><b>رقم الهاتف:</b> ${order.customer.phone || ""}</div>
-        <div><b>المحافظة:</b> ${order.customer.city || ""}</div>
-        <div><b>العنوان:</b> ${order.customer.address || "غير محدد"}</div>
-      </div>
-      <table style="width:100%; border-collapse:collapse; margin:14px 0; font-size:15px;">
-        <thead><tr style="background:#eff6ff;"><th style="border:1px solid #cbd5e1;padding:10px;">#</th><th style="border:1px solid #cbd5e1;padding:10px;">المنتج</th><th style="border:1px solid #cbd5e1;padding:10px;">التفاصيل</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <div style="margin-top:18px; padding:16px; border:1px solid #cbd5e1; border-radius:12px; background:#f8fafc; font-size:17px; line-height:2;">
-        <div><b>مبلغ الطلب:</b> ${formatMoney(order.price)}</div>
-        <div><b>العربون:</b> ${formatMoney(order.deposit)}</div>
-        <div><b>المتبقي:</b> ${formatMoney(Number(order.price || 0) - Number(order.deposit || 0))}</div>
-        <div><b>أجور التوصيل:</b> ${formatMoney(DELIVERY_FEE)}</div>
-        <div><b>شركة التوصيل:</b> ${DELIVERY_COMPANY}</div>
-        <div style="border-top:1px solid #cbd5e1; margin-top:8px; padding-top:8px; color:#0f6e56;"><b>السعر الكلي (مع التوصيل):</b> ${formatMoney(totalWithDelivery)}</div>
-      </div>
-      <p style="margin-top:20px; text-align:center; font-weight:bold;">شكراً لاختياركم متجر نايت ستور</p>
-    </div>
-  `;
+  const total = Number(order.price||0)+DELIVERY_FEE;
+  return `<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;padding:28px;color:#111827;background:#fff;width:760px;box-sizing:border-box;"><div style="border-bottom:2px solid #111827;padding-bottom:14px;margin-bottom:18px;"><h1 style="margin:0;font-size:28px;">فاتورة طلب</h1><p style="margin:6px 0 0;font-size:16px;">متجر نايت ستور - الطباعة ثلاثية الأبعاد</p><p style="margin:6px 0 0;"><b>رقم الطلب:</b> ${order.id}</p></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;font-size:15px;"><div><b>اسم الزبون:</b> ${order.customer.name||""}</div><div><b>رقم الهاتف:</b> ${order.customer.phone||""}</div><div><b>المحافظة:</b> ${order.customer.city||""}</div><div><b>العنوان:</b> ${order.customer.address||"غير محدد"}</div></div><table style="width:100%;border-collapse:collapse;margin:14px 0;font-size:15px;"><thead><tr style="background:#eff6ff;"><th style="border:1px solid #cbd5e1;padding:10px;">#</th><th style="border:1px solid #cbd5e1;padding:10px;">المنتج</th><th style="border:1px solid #cbd5e1;padding:10px;">التفاصيل</th></tr></thead><tbody>${rows}</tbody></table><div style="margin-top:18px;padding:16px;border:1px solid #cbd5e1;border-radius:12px;background:#f8fafc;font-size:17px;line-height:2;"><div><b>مبلغ الطلب:</b> ${fmt(order.price)}</div><div><b>العربون:</b> ${fmt(order.deposit)}</div><div><b>المتبقي:</b> ${fmt(Number(order.price||0)-Number(order.deposit||0))}</div><div><b>أجور التوصيل:</b> ${fmt(DELIVERY_FEE)}</div><div><b>شركة التوصيل:</b> ${DELIVERY_COMPANY}</div><div style="border-top:1px solid #cbd5e1;margin-top:8px;padding-top:8px;color:#0f6e56;"><b>السعر الكلي (مع التوصيل):</b> ${fmt(total)}</div></div><p style="margin-top:20px;text-align:center;font-weight:bold;">شكراً لاختياركم متجر نايت ستور</p></div>`;
 }
 
-function downloadHtmlAsPDF(html, filename) {
-  const holder = document.createElement("div");
-  holder.style.position = "fixed";
-  holder.style.left = "-10000px";
-  holder.style.top = "0";
-  holder.innerHTML = html;
-  document.body.appendChild(holder);
-  const element = holder.firstElementChild || holder;
-  html2pdf().set({
-    margin: 8,
-    filename,
-    image: { type: "jpeg", quality: 0.98 },
-    html2canvas: { scale: 2, useCORS: true },
-    jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-  }).from(element).save().finally(() => holder.remove());
+function downloadPDF(html, filename) {
+  const h=document.createElement("div"); h.style.cssText="position:fixed;left:-10000px;top:0;"; h.innerHTML=html; document.body.appendChild(h);
+  html2pdf().set({margin:8,filename,image:{type:"jpeg",quality:0.98},html2canvas:{scale:2,useCORS:true},jsPDF:{unit:"mm",format:"a4",orientation:"portrait"}}).from(h.firstElementChild||h).save().finally(()=>h.remove());
 }
 
-function downloadInvoicePDF(order) {
-  downloadHtmlAsPDF(invoiceHtml(order), `invoice-${order.id}.pdf`);
-}
+const s = {
+  app:      {minHeight:"100vh",background:D.bg,padding:"20px 24px",fontFamily:"Cairo,Tahoma,Arial,sans-serif",color:D.text,direction:"rtl"},
+  topbar:   {background:D.surface,borderRadius:16,padding:"18px 24px",display:"flex",justifyContent:"space-between",gap:16,flexWrap:"wrap",alignItems:"center",border:`1px solid ${D.border}`,marginBottom:20},
+  navBtn:   {border:`1px solid ${D.border}`,background:"transparent",color:D.textMuted,borderRadius:8,padding:"8px 14px",cursor:"pointer",fontWeight:700,fontFamily:"Cairo,inherit",fontSize:13},
+  navActive:{border:`1px solid ${D.accent}`,background:D.accentBg,color:D.accent,borderRadius:8,padding:"8px 14px",cursor:"pointer",fontWeight:700,fontFamily:"Cairo,inherit",fontSize:13},
+  addBtn:   {border:0,background:D.accent,color:"#0d1117",borderRadius:8,padding:"8px 16px",cursor:"pointer",fontWeight:800,fontFamily:"Cairo,inherit",fontSize:13},
+  delBtn:   {border:`1px solid ${D.redBg}`,background:D.redBg,color:D.red,borderRadius:8,padding:"8px 14px",cursor:"pointer",fontWeight:700,fontFamily:"Cairo,inherit",fontSize:13},
+  statsGrid:{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom:20},
+  statCard: {background:D.surface,border:`1px solid ${D.border}`,borderRadius:12,padding:"14px 16px"},
+  search:   {width:"100%",boxSizing:"border-box",marginBottom:14,border:`1px solid ${D.border}`,borderRadius:10,padding:"12px 16px",fontSize:14,outline:"none",background:D.surface,color:D.text,fontFamily:"Cairo,inherit"},
+  filterRow:{display:"flex",gap:8,flexWrap:"wrap",marginBottom:20},
+  fBtn:     {border:`1px solid ${D.border}`,background:"transparent",color:D.textMuted,borderRadius:999,padding:"6px 14px",cursor:"pointer",fontWeight:700,fontFamily:"Cairo,inherit",fontSize:12},
+  fActive:  {border:`1px solid ${D.accent}`,background:D.accentBg,color:D.accent,borderRadius:999,padding:"6px 14px",cursor:"pointer",fontWeight:700,fontFamily:"Cairo,inherit",fontSize:12},
+  grid:     {display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(330px,1fr))",gap:16},
+  card:     {background:D.surface,border:`1px solid ${D.border}`,borderRadius:14,padding:18},
+  form:     {maxWidth:920,margin:"0 auto",background:D.surface,border:`1px solid ${D.border}`,borderRadius:16,padding:24,display:"grid",gap:14},
+  label:    {display:"grid",gap:6,fontWeight:800,color:D.textMuted,fontSize:13},
+  input:    {border:`1px solid ${D.border}`,borderRadius:10,padding:"10px 12px",fontSize:14,outline:"none",background:D.surface2,color:D.text,fontFamily:"Cairo,inherit",minWidth:0},
+  secTitle: {margin:"10px 0 0",color:D.accent,borderBottom:`1px solid ${D.border}`,paddingBottom:8,fontWeight:800,fontSize:15},
+  saveBtn:  {border:0,background:D.green,color:"#0d1117",borderRadius:10,padding:14,fontSize:16,cursor:"pointer",fontWeight:900,fontFamily:"Cairo,inherit"},
+  itemBox:  {display:"grid",gap:12,background:D.surface2,border:`1px solid ${D.border}`,borderRadius:14,padding:16},
+  eRow:     {display:"grid",gridTemplateColumns:"1.5fr 80px 1fr 140px auto",gap:8,alignItems:"center"},
+  smBlue:   {border:0,background:D.accentBg,color:D.accent,borderRadius:8,padding:"8px 12px",cursor:"pointer",fontWeight:800,fontFamily:"Cairo,inherit",fontSize:12},
+  smRed:    {border:0,background:D.redBg,color:D.red,borderRadius:8,padding:"8px 10px",cursor:"pointer",fontWeight:800,fontFamily:"Cairo,inherit",fontSize:12},
+  addItem:  {border:`1px dashed ${D.accent}`,background:D.accentBg,color:D.accent,borderRadius:12,padding:12,cursor:"pointer",fontWeight:900,fontFamily:"Cairo,inherit",fontSize:14},
+  colorPkr: {height:42,width:60,border:`1px solid ${D.border}`,borderRadius:10,background:D.surface2,padding:4,cursor:"pointer"},
+  chip:     {display:"inline-flex",alignItems:"center",gap:8,background:D.surface2,color:D.text,border:`1px solid ${D.border}`,borderRadius:999,padding:"7px 12px",fontWeight:800,fontSize:13},
+  xBtn:     {marginRight:6,border:0,background:D.redBg,color:D.red,borderRadius:999,cursor:"pointer",fontWeight:900,padding:"2px 7px",fontFamily:"inherit"},
+  delBox:   {border:`1px solid ${D.border}`,background:D.surface2,borderRadius:10,padding:"10px 12px",display:"flex",gap:8,alignItems:"center",fontWeight:800,fontSize:13,color:D.text},
+  delivBox: {background:D.accentBg,color:D.accent,border:`1px solid #1d3f7a`,padding:12,borderRadius:10,fontSize:13},
+  imgBox:   {display:"grid",gap:10,background:D.surface,border:`1px dashed ${D.border2}`,borderRadius:12,padding:12},
+};
 
 export default function App() {
-  const SITE_PASSWORD = "333";
-
-  const [authorized, setAuthorized] = useState(
-    localStorage.getItem("site_auth") === "yes"
-  );
+  const [authorized, setAuthorized] = useState(localStorage.getItem("site_auth")==="yes");
   const [password, setPassword] = useState("");
 
   if (!authorized) {
     return (
-      <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", gap: 15 }}>
-        <h2>ادخل رمز الدخول</h2>
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-        <button onClick={() => {
-          if (password === SITE_PASSWORD) {
-            localStorage.setItem("site_auth", "yes");
-            setAuthorized(true);
-          } else {
-            alert("رمز غير صحيح");
-          }
-        }}>دخول</button>
+      <div style={{minHeight:"100vh",background:D.bg,display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"center",gap:16,fontFamily:"Cairo,sans-serif",color:D.text}}>
+        <h2 style={{margin:0,fontSize:22}}>ادخل رمز الدخول</h2>
+        <input type="password" value={password} onChange={e=>setPassword(e.target.value)}
+          style={{background:D.surface2,border:`1px solid ${D.border}`,borderRadius:10,padding:"10px 16px",color:D.text,fontSize:16,outline:"none",fontFamily:"Cairo,inherit",width:220}}/>
+        <button onClick={()=>{if(password==="333"){localStorage.setItem("site_auth","yes");setAuthorized(true);}else alert("رمز غير صحيح");}}
+          style={{background:D.accent,color:"#0d1117",border:0,borderRadius:10,padding:"10px 28px",fontSize:15,fontWeight:900,cursor:"pointer",fontFamily:"Cairo,inherit"}}>دخول</button>
       </div>
     );
   }
 
   const [page, setPage] = useState("orders");
   const [orders, setOrders] = useState([]);
-  const [colors, setColors] = useState(() => loadData("colors_v2", defaultColors));
-  const [products, setProducts] = useState(() => loadData("products_v1", defaultProducts));
+  // ✅ إصلاح: تحميل وحفظ الألوان والمنتجات بشكل صحيح
+  const [colors, setColors] = useState(()=>loadData("ns_colors_v1", defaultColors));
+  const [products, setProducts] = useState(()=>loadData("ns_products_v1", defaultProducts));
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("الكل");
-  const [newColor, setNewColor] = useState({ name: "", code: "#000000" });
+  const [newColor, setNewColor] = useState({name:"",code:"#000000"});
   const [newProduct, setNewProduct] = useState("");
-  const [editingOrderId, setEditingOrderId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState({customerName:"",phone:"",city:"بغداد",address:"",items:[emptyItem(defaultColors,defaultProducts)],price:"",deposit:"",tracking:"",notes:""});
 
-  const [orderForm, setOrderForm] = useState({
-    customerName: "",
-    phone: "",
-    city: "بغداد",
-    address: "",
-    items: [emptyItem(defaultColors, defaultProducts)],
-    price: "",
-    deposit: "",
-    tracking: "",
-    notes: "",
-  });
+  // ✅ حفظ فوري عند كل تغيير
+  useEffect(()=>{ saveData("ns_colors_v1", colors); }, [colors]);
+  useEffect(()=>{ saveData("ns_products_v1", products); }, [products]);
 
-  // ✅ إصلاح: normalize الحالة عند الجلب من Firebase
-  useEffect(() => {
-    async function fetchOrders() {
-      const snapshot = await getDocs(collection(db, "orders"));
-      const data = snapshot.docs.map((d) => ({
-        firebaseId: d.id,
-        ...d.data(),
-        status: (d.data().status || DEFAULT_STATUS).trim(),
-      }));
-      setOrders(data);
+  // ✅ إصلاح الفلتر: trim الحالة عند الجلب
+  useEffect(()=>{
+    async function fetch_() {
+      const snap = await getDocs(collection(db,"orders"));
+      setOrders(snap.docs.map(d=>({firebaseId:d.id,...d.data(),status:String(d.data().status||DEFAULT_STATUS).trim()})));
     }
-    fetchOrders();
-  }, []);
+    fetch_();
+  },[]);
 
-  const customers = useMemo(() => {
+  const customers = useMemo(()=>{
     const map = new Map();
-    orders.forEach((order) => {
-      const key = normalizePhone(order.customer.phone || order.customer.name);
-      const old = map.get(key);
-      map.set(key, {
-        ...order.customer,
-        total: (old?.total || 0) + Number(order.price || 0),
-        count: (old?.count || 0) + 1,
-      });
+    orders.forEach(o=>{
+      const k = normalizePhone(o.customer.phone||o.customer.name);
+      const old = map.get(k);
+      map.set(k,{...o.customer,total:(old?.total||0)+Number(o.price||0),count:(old?.count||0)+1});
     });
     return Array.from(map.values());
-  }, [orders]);
+  },[orders]);
 
-  // ✅ إصلاح الفلتر: مقارنة بعد trim()
-  const filteredOrders = useMemo(() => {
+  // ✅ إصلاح الفلتر: مقارنة صحيحة
+  const filteredOrders = useMemo(()=>{
     const q = search.trim();
     return [...orders]
-      .sort((a, b) => {
-        const numA = Number(a.id?.replace("O-", "") || 0);
-        const numB = Number(b.id?.replace("O-", "") || 0);
-        return numA - numB;
-      })
-      .filter((o) => {
-        const itemsText = o.items
-          .map((i) => `${i.product} ${getItemEntries(i).map((e) => `${e.name} ${e.colorName}`).join(" ")}`)
-          .join(" ");
-        const text = `${o.id} ${o.status} ${o.customer.name} ${o.customer.phone} ${o.customer.city} ${itemsText}`;
-        const matchSearch = text.includes(q);
-        const matchStatus = statusFilter === "الكل" || o.status?.trim() === statusFilter.trim();
-        return matchSearch && matchStatus;
+      .sort((a,b)=>Number(a.id?.replace("O-","")||0)-Number(b.id?.replace("O-","")||0))
+      .filter(o=>{
+        const txt = `${o.id} ${o.status} ${o.customer.name} ${o.customer.phone} ${o.customer.city} ${o.items.map(i=>`${i.product} ${getItemEntries(i).map(e=>`${e.name} ${e.colorName}`).join(" ")}`).join(" ")}`;
+        return (!q||txt.includes(q)) && (statusFilter==="الكل" || String(o.status).trim()===String(statusFilter).trim());
       });
-  }, [orders, search, statusFilter]);
+  },[orders,search,statusFilter]);
 
-  const filteredCustomers = useMemo(() => {
-    const q = search.trim();
-    return customers.filter((c) => `${c.name} ${c.phone} ${c.city} ${c.address}`.includes(q));
-  }, [customers, search]);
+  const filteredCustomers = useMemo(()=>{
+    const q=search.trim();
+    return customers.filter(c=>`${c.name} ${c.phone} ${c.city} ${c.address}`.includes(q));
+  },[customers,search]);
 
-  const moneyStats = useMemo(() => {
-    const now = new Date();
-    const startOfWeek = new Date(now);
-    startOfWeek.setDate(now.getDate() - 6);
-    startOfWeek.setHours(0, 0, 0, 0);
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const completed = orders.filter((o) => o.status === "مكتمل");
-    const completedTotal = completed.reduce((sum, o) => sum + Number(o.price || 0), 0);
-    const weeklyCompleted = completed.filter((o) => parseOrderDate(o) >= startOfWeek);
-    const monthlyCompleted = completed.filter((o) => parseOrderDate(o) >= startOfMonth);
+  const stats = useMemo(()=>{
+    const now=new Date();
+    const sw=new Date(now); sw.setDate(now.getDate()-6); sw.setHours(0,0,0,0);
+    const sm=new Date(now.getFullYear(),now.getMonth(),1);
+    const done=orders.filter(o=>o.status==="مكتمل");
+    const wDone=done.filter(o=>parseOrderDate(o)>=sw);
+    const mDone=done.filter(o=>parseOrderDate(o)>=sm);
     return {
-      completedTotal,
-      weeklyCompletedTotal: weeklyCompleted.reduce((sum, o) => sum + Number(o.price || 0), 0),
-      monthlyCompletedTotal: monthlyCompleted.reduce((sum, o) => sum + Number(o.price || 0), 0),
-      completedCount: completed.length,
-      weeklyCompletedCount: weeklyCompleted.length,
-      monthlyCompletedCount: monthlyCompleted.length,
+      total:done.reduce((s,o)=>s+Number(o.price||0),0),
+      wTotal:wDone.reduce((s,o)=>s+Number(o.price||0),0),
+      mTotal:mDone.reduce((s,o)=>s+Number(o.price||0),0),
+      count:done.length, wCount:wDone.length, mCount:mDone.length,
     };
-  }, [orders]);
+  },[orders]);
 
-  function updateItem(index, patch) {
-    const items = [...orderForm.items];
-    items[index] = { ...items[index], ...patch };
-    setOrderForm({ ...orderForm, items });
-  }
-
-  function addItem() {
-    setOrderForm({ ...orderForm, items: [...orderForm.items, emptyItem(colors, products)] });
-  }
-
-  function removeItem(index) {
-    if (orderForm.items.length === 1) return;
-    setOrderForm({ ...orderForm, items: orderForm.items.filter((_, i) => i !== index) });
-  }
-
-  function updateEntry(itemIndex, entryIndex, patch) {
-    const item = orderForm.items[itemIndex];
-    const entries = [...item.entries];
-    entries[entryIndex] = { ...entries[entryIndex], ...patch };
-    updateItem(itemIndex, { entries });
-  }
-
-  function addEntryToItem(itemIndex) {
-    const item = orderForm.items[itemIndex];
-    updateItem(itemIndex, { entries: [...item.entries, emptyEntry(colors)] });
-  }
-
-  function removeEntryFromItem(itemIndex, entryIndex) {
-    const item = orderForm.items[itemIndex];
-    if (item.entries.length === 1) return;
-    updateItem(itemIndex, { entries: item.entries.filter((_, i) => i !== entryIndex) });
-  }
-
-  function resetOrderForm() {
-    setEditingOrderId(null);
-    setOrderForm({
-      customerName: "",
-      phone: "",
-      city: "بغداد",
-      address: "",
-      items: [emptyItem(colors, products)],
-      price: "",
-      deposit: "",
-      tracking: "",
-      notes: "",
-    });
-  }
+  const updItem=(i,p)=>{ const items=[...form.items]; items[i]={...items[i],...p}; setForm({...form,items}); };
+  const updEntry=(ii,ei,p)=>{ const item=form.items[ii]; const entries=[...item.entries]; entries[ei]={...entries[ei],...p}; updItem(ii,{entries}); };
+  const resetForm=()=>{ setEditingId(null); setForm({customerName:"",phone:"",city:"بغداد",address:"",items:[emptyItem(colors,products)],price:"",deposit:"",tracking:"",notes:""}); };
 
   async function submitOrder() {
-    if (!orderForm.customerName || !orderForm.phone || !orderForm.items[0]?.product) {
-      return alert("اكتب اسم الزبون ورقم الهاتف وتفاصيل الطلب");
-    }
-
-    const cleanItems = orderForm.items.map((item) => ({
-      ...item,
-      entries: item.entries.map((entry) => ({
-        ...entry,
-        name: entry.name.trim(),
-        qty: Number(entry.qty || 1),
-      })).filter((entry) => entry.name),
-    }));
-
-    const oldOrder = orders.find((o) => o.id === editingOrderId);
-    const savedOrder = {
-      id: editingOrderId || `O-${5001 + orders.length}`,
-      status: oldOrder?.status || DEFAULT_STATUS,
-      customer: {
-        name: orderForm.customerName,
-        phone: normalizePhone(orderForm.phone),
-        city: orderForm.city,
-        address: orderForm.address,
-      },
-      items: cleanItems,
-      price: Number(orderForm.price || 0),
-      deposit: Number(orderForm.deposit || 0),
-      tracking: orderForm.tracking,
-      notes: orderForm.notes,
-      createdAt: oldOrder?.createdAt || new Date().toLocaleString("ar-IQ"),
-      createdAtISO: oldOrder?.createdAtISO || new Date().toISOString(),
-      updatedAt: new Date().toLocaleString("ar-IQ"),
+    if (!form.customerName||!form.phone||!form.items[0]?.product) return alert("اكتب اسم الزبون ورقم الهاتف وتفاصيل الطلب");
+    const cleanItems=form.items.map(item=>({...item,entries:item.entries.map(e=>({...e,name:e.name.trim(),qty:Number(e.qty||1)})).filter(e=>e.name)}));
+    const old=orders.find(o=>o.id===editingId);
+    const saved={
+      id:editingId||`O-${5001+orders.length}`,
+      status:old?.status||DEFAULT_STATUS,
+      customer:{name:form.customerName,phone:normalizePhone(form.phone),city:form.city,address:form.address},
+      items:cleanItems,price:Number(form.price||0),deposit:Number(form.deposit||0),
+      tracking:form.tracking,notes:form.notes,
+      createdAt:old?.createdAt||new Date().toLocaleString("ar-IQ"),
+      createdAtISO:old?.createdAtISO||new Date().toISOString(),
+      updatedAt:new Date().toLocaleString("ar-IQ"),
     };
-
-    if (editingOrderId) {
-      const oldOrderDoc = orders.find((o) => o.id === editingOrderId);
-      if (oldOrderDoc?.firebaseId) {
-        await updateDoc(doc(db, "orders", oldOrderDoc.firebaseId), savedOrder);
-      }
-      setOrders(orders.map((o) =>
-        o.id === editingOrderId ? { ...savedOrder, firebaseId: oldOrderDoc?.firebaseId } : o
-      ));
-      sendDiscord(`✏️ تم تعديل طلب\nرقم الطلب: ${savedOrder.id}\nالزبون: ${savedOrder.customer.name}`);
+    if (editingId) {
+      if (old?.firebaseId) await updateDoc(doc(db,"orders",old.firebaseId),saved);
+      setOrders(orders.map(o=>o.id===editingId?{...saved,firebaseId:old?.firebaseId}:o));
+      sendDiscord(`✏️ تعديل طلب\nرقم: ${saved.id}\nالزبون: ${saved.customer.name}`);
     } else {
-      const docRef = await addDoc(collection(db, "orders"), savedOrder);
-      setOrders([...orders, { ...savedOrder, firebaseId: docRef.id }]);
-      const itemsText = savedOrder.items.map((i, idx) => {
-        const lines = getItemEntries(i).map((e, eIdx) => `   ${eIdx + 1}- الاسم: ${e.name} | العدد: ${e.qty} | اللون: ${e.colorName}`).join("\n");
-        return `${idx + 1}) ${i.product}\n${lines}`;
-      }).join("\n");
-
-      sendDiscord(
-        `🧾 طلب جديد\n` +
-        `رقم الطلب: ${savedOrder.id}\n` +
-        `الحالة: ${savedOrder.status}\n` +
-        `الزبون: ${savedOrder.customer.name}\n` +
-        `الهاتف: ${savedOrder.customer.phone}\n` +
-        `العنوان: ${savedOrder.customer.city} / ${savedOrder.customer.address}\n` +
-        `المنتجات:\n${itemsText}\n` +
-        `السعر: ${savedOrder.price.toLocaleString()} د.ع\n` +
-        `العربون: ${savedOrder.deposit.toLocaleString()} د.ع\n` +
-        `المتبقي: ${(savedOrder.price - savedOrder.deposit).toLocaleString()} د.ع\n` +
-        `السعر الكلي (مع التوصيل): ${(savedOrder.price + DELIVERY_FEE).toLocaleString()} د.ع\n` +
-        `شركة التوصيل: ${DELIVERY_COMPANY}\n` +
-        `أجرة التوصيل: ${DELIVERY_FEE.toLocaleString()} د.ع\n` +
-        `ملاحظات: ${savedOrder.notes || "لا يوجد"}`
-      );
+      const ref=await addDoc(collection(db,"orders"),saved);
+      setOrders([...orders,{...saved,firebaseId:ref.id}]);
+      sendDiscord(`🧾 طلب جديد\nرقم: ${saved.id}\nالزبون: ${saved.customer.name}\nالهاتف: ${saved.customer.phone}\nالسعر الكلي: ${(saved.price+DELIVERY_FEE).toLocaleString()} د.ع`);
     }
-
-    resetOrderForm();
-    setPage("orders");
+    resetForm(); setPage("orders");
   }
 
-  function startEditOrder(order) {
-    setEditingOrderId(order.id);
-    setOrderForm({
-      customerName: order.customer.name || "",
-      phone: order.customer.phone || "",
-      city: order.customer.city || "بغداد",
-      address: order.customer.address || "",
-      items: order.items.map((item) => ({
-        product: item.product,
-        notes: item.notes || "",
-        image: item.image || null,
-        entries: getItemEntries(item).map((entry) => ({
-          name: entry.name || "",
-          qty: entry.qty || 1,
-          colorName: entry.colorName || colors[0]?.name || "",
-          colorCode: entry.colorCode || colors[0]?.code || "#000000",
-        })),
-      })),
-      price: String(order.price || ""),
-      deposit: String(order.deposit || ""),
-      tracking: order.tracking || "",
-      notes: order.notes || "",
+  function startEdit(order) {
+    setEditingId(order.id);
+    setForm({
+      customerName:order.customer.name||"",phone:order.customer.phone||"",city:order.customer.city||"بغداد",address:order.customer.address||"",
+      items:order.items.map(item=>({product:item.product,notes:item.notes||"",image:item.image||null,entries:getItemEntries(item).map(e=>({name:e.name||"",qty:e.qty||1,colorName:e.colorName||colors[0]?.name||"",colorCode:e.colorCode||colors[0]?.code||"#000"}))})),
+      price:String(order.price||""),deposit:String(order.deposit||""),tracking:order.tracking||"",notes:order.notes||"",
     });
     setPage("newOrder");
   }
 
-  function exportCustomersPDF() {
-    const rows = filteredCustomers.map((c, index) => `
-      <tr>
-        <td style="border:1px solid #cbd5e1; padding:10px;">${index + 1}</td>
-        <td style="border:1px solid #cbd5e1; padding:10px;">${c.name || ""}</td>
-        <td style="border:1px solid #cbd5e1; padding:10px;">${c.phone || ""}</td>
-        <td style="border:1px solid #cbd5e1; padding:10px;">${c.city || ""}</td>
-        <td style="border:1px solid #cbd5e1; padding:10px;">${c.address || ""}</td>
-        <td style="border:1px solid #cbd5e1; padding:10px;">${c.count || 0}</td>
-        <td style="border:1px solid #cbd5e1; padding:10px;">${formatMoney(c.total)}</td>
-      </tr>
-    `).join("");
-
-    const html = `
-      <div dir="rtl" style="font-family: Tahoma, Arial, sans-serif; padding: 28px; color: #111827; background:#ffffff; width: 900px; box-sizing:border-box;">
-        <h1 style="margin: 0 0 8px;">تقرير الزبائن - متجر نايت ستور</h1>
-        <p style="margin: 0 0 18px; color: #475569;">تاريخ التصدير: ${new Date().toLocaleString("ar-IQ")}</p>
-        <table style="width:100%; border-collapse:collapse; font-size:14px;">
-          <thead>
-            <tr style="background:#eff6ff;">
-              <th style="border:1px solid #cbd5e1; padding:10px;">#</th>
-              <th style="border:1px solid #cbd5e1; padding:10px;">اسم الزبون</th>
-              <th style="border:1px solid #cbd5e1; padding:10px;">رقم الهاتف</th>
-              <th style="border:1px solid #cbd5e1; padding:10px;">المحافظة</th>
-              <th style="border:1px solid #cbd5e1; padding:10px;">العنوان</th>
-              <th style="border:1px solid #cbd5e1; padding:10px;">عدد الطلبات</th>
-              <th style="border:1px solid #cbd5e1; padding:10px;">الإجمالي</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>
-    `;
-    downloadHtmlAsPDF(html, "customers-report-night-store.pdf");
+  async function updateStatus(id, status) {
+    const o=orders.find(x=>x.id===id);
+    if (o?.firebaseId) await updateDoc(doc(db,"orders",o.firebaseId),{status});
+    setOrders(orders.map(x=>x.id===id?{...x,status}:x));
+    sendDiscord(`🔄 تحديث حالة\nرقم: ${id}\nالزبون: ${o?.customer.name||""}\nالحالة: ${status}`);
   }
 
-  async function updateOrderStatus(orderId, status) {
-    const oldOrder = orders.find((o) => o.id === orderId);
-    if (oldOrder?.firebaseId) {
-      await updateDoc(doc(db, "orders", oldOrder.firebaseId), { status });
-    }
-    setOrders(orders.map((o) => o.id === orderId ? { ...o, status } : o));
-    sendDiscord(`🔄 تحديث حالة طلب\nرقم الطلب: ${orderId}\nالزبون: ${oldOrder?.customer.name || ""}\nالحالة الجديدة: ${status}`);
-  }
-
-  async function deleteOrder(orderId) {
+  async function delOrder(id) {
     if (!confirm("متأكد تريد حذف الطلب؟")) return;
-    const oldOrder = orders.find((o) => o.id === orderId);
-    if (oldOrder?.firebaseId) {
-      await deleteDoc(doc(db, "orders", oldOrder.firebaseId));
-    }
-    setOrders(orders.filter((o) => o.id !== orderId));
+    const o=orders.find(x=>x.id===id);
+    if (o?.firebaseId) await deleteDoc(doc(db,"orders",o.firebaseId));
+    setOrders(orders.filter(x=>x.id!==id));
   }
 
   function addColor() {
-    const name = newColor.name.trim();
-    if (!name) return;
-    if (colors.some((c) => c.name === name)) return alert("هذا اللون موجود مسبقاً");
-    setColors([...colors, { name, code: newColor.code }]);
-    setNewColor({ name: "", code: "#000000" });
-  }
-
-  function deleteColor(name) {
-    setColors(colors.filter((c) => c.name !== name));
+    const name=newColor.name.trim(); if (!name) return;
+    if (colors.some(c=>c.name===name)) return alert("هذا اللون موجود");
+    setColors([...colors,{name,code:newColor.code}]);
+    setNewColor({name:"",code:"#000000"});
   }
 
   function addProduct() {
-    const product = newProduct.trim();
-    if (!product) return;
-    if (products.includes(product)) return alert("هذا المنتج موجود مسبقاً");
-    setProducts([...products, product]);
-    setNewProduct("");
+    const p=newProduct.trim(); if (!p) return;
+    if (products.includes(p)) return alert("هذا المنتج موجود");
+    setProducts([...products,p]); setNewProduct("");
   }
 
-  function deleteProduct(product) {
-    setProducts(products.filter((p) => p !== product));
-  }
-
-  function clearAllData() {
-    if (!confirm("متأكد تريد حذف كل البيانات؟")) return;
-    setOrders([]);
-    localStorage.removeItem("orders_v4");
+  function exportPDF() {
+    const rows=filteredCustomers.map((c,i)=>`<tr><td style="border:1px solid #cbd5e1;padding:10px;">${i+1}</td><td style="border:1px solid #cbd5e1;padding:10px;">${c.name||""}</td><td style="border:1px solid #cbd5e1;padding:10px;">${c.phone||""}</td><td style="border:1px solid #cbd5e1;padding:10px;">${c.city||""}</td><td style="border:1px solid #cbd5e1;padding:10px;">${c.address||""}</td><td style="border:1px solid #cbd5e1;padding:10px;">${c.count||0}</td><td style="border:1px solid #cbd5e1;padding:10px;">${fmt(c.total)}</td></tr>`).join("");
+    downloadPDF(`<div dir="rtl" style="font-family:Tahoma;padding:28px;color:#111827;background:#fff;width:900px;"><h1>تقرير الزبائن - متجر نايت ستور</h1><p>تاريخ التصدير: ${new Date().toLocaleString("ar-IQ")}</p><table style="width:100%;border-collapse:collapse;font-size:14px;"><thead><tr style="background:#eff6ff;"><th style="border:1px solid #cbd5e1;padding:10px;">#</th><th style="border:1px solid #cbd5e1;padding:10px;">الاسم</th><th style="border:1px solid #cbd5e1;padding:10px;">الهاتف</th><th style="border:1px solid #cbd5e1;padding:10px;">المحافظة</th><th style="border:1px solid #cbd5e1;padding:10px;">العنوان</th><th style="border:1px solid #cbd5e1;padding:10px;">الطلبات</th><th style="border:1px solid #cbd5e1;padding:10px;">الإجمالي</th></tr></thead><tbody>${rows}</tbody></table></div>`,"customers.pdf");
   }
 
   return (
-    <div dir="rtl" style={styles.app}>
-      <header style={styles.topbar}>
+    <div style={s.app}>
+      <header style={s.topbar}>
         <div>
-          <h1 style={styles.title}>نظام طلبات متجر 3D</h1>
-          <p style={styles.subtitle}>طلبات + زبائن تلقائي + لون وعدد لكل اسم + منتجات + Backup Discord</p>
+          <h1 style={{margin:0,fontSize:24,color:D.text,fontWeight:900}}>🖨 نايت ستور 3D</h1>
+          <p style={{margin:"4px 0 0",color:D.textMuted,fontSize:12}}>نظام إدارة الطلبات</p>
         </div>
-        <div style={styles.buttons}>
-          <button style={page === "orders" ? styles.activeButton : styles.button} onClick={() => setPage("orders")}>الطلبات</button>
-          <button style={page === "customers" ? styles.activeButton : styles.button} onClick={() => setPage("customers")}>الزبائن</button>
-          <button style={page === "colors" ? styles.activeButton : styles.button} onClick={() => setPage("colors")}>الألوان</button>
-          <button style={page === "products" ? styles.activeButton : styles.button} onClick={() => setPage("products")}>المنتجات</button>
-          <button style={page === "reports" ? styles.activeButton : styles.button} onClick={() => setPage("reports")}>التقارير</button>
-          <button style={styles.primaryButton} onClick={() => { resetOrderForm(); setPage("newOrder"); }}>+ طلب جديد</button>
-          <button style={styles.dangerButton} onClick={clearAllData}>حذف الكل</button>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          {[["orders","الطلبات"],["customers","الزبائن"],["colors","الألوان"],["products","المنتجات"],["reports","التقارير"]].map(([k,l])=>(
+            <button key={k} style={page===k?s.navActive:s.navBtn} onClick={()=>setPage(k)}>{l}</button>
+          ))}
+          <button style={s.addBtn} onClick={()=>{resetForm();setPage("newOrder");}}>+ طلب جديد</button>
+          <button style={s.delBtn} onClick={()=>{if(confirm("حذف كل البيانات؟")){setOrders([]);localStorage.removeItem("orders_v4");}}}>حذف الكل</button>
         </div>
       </header>
 
-      <section style={styles.stats}>
-        <Stat title="كل الطلبات" value={orders.length} />
-        <Stat title="الزبائن" value={customers.length} />
-        <Stat title="تحت التصميم" value={orders.filter((o) => o.status === "تحت التصميم").length} />
-        <Stat title="تحت الطباعة" value={orders.filter((o) => o.status === "تحت الطباعة").length} />
-        <Stat title="قيد التوصيل" value={orders.filter((o) => o.status === "قيد التوصيل").length} />
-        <Stat title="مبالغ مكتملة هذا الأسبوع" value={formatMoney(moneyStats.weeklyCompletedTotal)} />
-        <Stat title="مبالغ مكتملة هذا الشهر" value={formatMoney(moneyStats.monthlyCompletedTotal)} />
-      </section>
-
-      <input style={styles.search} placeholder="بحث باسم الزبون أو الرقم أو الطلب أو اللون..." value={search} onChange={(e) => setSearch(e.target.value)} />
-
-      <div style={{ ...styles.buttons, marginTop: 12 }}>
-        {["الكل", ...statuses].map((s) => (
-          <button key={s} style={statusFilter === s ? styles.activeButton : styles.button} onClick={() => setStatusFilter(s)}>
-            {s}
-          </button>
+      <div style={s.statsGrid}>
+        {[
+          ["كل الطلبات",orders.length,D.accent],
+          ["الزبائن",customers.length,"#c084fc"],
+          ["تحت التصميم",orders.filter(o=>o.status==="تحت التصميم").length,"#60a5fa"],
+          ["تحت الطباعة",orders.filter(o=>o.status==="تحت الطباعة").length,"#fbbf24"],
+          ["قيد التوصيل",orders.filter(o=>o.status==="قيد التوصيل").length,"#a78bfa"],
+          ["مكتملة الأسبوع",fmt(stats.wTotal),D.green],
+          ["مكتملة الشهر",fmt(stats.mTotal),"#34d399"],
+        ].map(([label,val,color])=>(
+          <div key={label} style={s.statCard}>
+            <div style={{fontSize:12,color:D.textMuted,marginBottom:6}}>{label}</div>
+            <div style={{fontSize:22,fontWeight:900,color}}>{val}</div>
+          </div>
         ))}
       </div>
 
-      {page === "orders" && (
-        <div style={styles.grid}>
-          {filteredOrders.map((o) => (
-            <OrderCard key={o.id} order={o} updateOrderStatus={updateOrderStatus} deleteOrder={deleteOrder} startEditOrder={startEditOrder} />
-          ))}
+      <input style={s.search} placeholder="بحث باسم الزبون أو الرقم أو الطلب أو اللون..." value={search} onChange={e=>setSearch(e.target.value)}/>
+
+      <div style={s.filterRow}>
+        {["الكل",...statuses].map(st=>(
+          <button key={st} style={statusFilter===st?s.fActive:s.fBtn} onClick={()=>setStatusFilter(st)}>{st}</button>
+        ))}
+      </div>
+
+      {page==="orders" && (
+        <div style={s.grid}>
+          {filteredOrders.map(o=><OrderCard key={o.id} order={o} updateStatus={updateStatus} delOrder={delOrder} startEdit={startEdit} colors={colors}/>)}
+          {filteredOrders.length===0 && <div style={{color:D.textMuted,padding:40,textAlign:"center",gridColumn:"1/-1"}}>لا توجد طلبات</div>}
         </div>
       )}
 
-      {page === "customers" && (
+      {page==="customers" && (
         <>
-          <div style={styles.exportRow}><button style={styles.primaryButton} onClick={exportCustomersPDF}>تحميل قائمة الزبائن PDF</button></div>
-          <div style={styles.gridTwo}>{filteredCustomers.map((c) => <CustomerCard key={c.phone} customer={c} />)}</div>
+          <button style={{...s.addBtn,marginBottom:14}} onClick={exportPDF}>تحميل PDF</button>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(270px,1fr))",gap:14}}>
+            {filteredCustomers.map(c=>(
+              <div key={c.phone} style={s.card}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                  <b style={{color:D.text,fontSize:15}}>{c.name}</b>
+                  <a style={{background:"#0d2a1a",border:"1px solid #1a5c34",color:"#4ade80",borderRadius:8,padding:"6px 10px",textDecoration:"none",fontSize:12,fontWeight:800}} href={makeWALink(c.phone,`مرحبا ${c.name}`)} target="_blank" rel="noreferrer">واتساب</a>
+                </div>
+                {[["الهاتف",c.phone],["العنوان",`${c.city} / ${c.address}`],["الطلبات",c.count]].map(([l,v])=>(
+                  <p key={l} style={{color:D.textMuted,fontSize:13,margin:"4px 0"}}><span style={{color:D.textDim}}>{l}: </span>{v}</p>
+                ))}
+                <p style={{color:D.green,fontSize:14,fontWeight:800,margin:"8px 0 0"}}>{c.total.toLocaleString()} د.ع</p>
+              </div>
+            ))}
+          </div>
         </>
       )}
 
-      {page === "colors" && (
-        <div style={styles.form}>
-          <h2 style={styles.formTitle}>مخزن الألوان والدرجات</h2>
-          <div style={styles.inlineForm}>
-            <input style={styles.input} value={newColor.name} onChange={(e) => setNewColor({ ...newColor, name: e.target.value })} placeholder="اسم اللون: PLA أسود مطفي / أزرق فاتح" />
-            <input style={styles.colorPicker} type="color" value={newColor.code} onChange={(e) => setNewColor({ ...newColor, code: e.target.value })} />
-            <button style={styles.primaryButton} onClick={addColor}>إضافة لون</button>
+      {page==="colors" && (
+        <div style={s.form}>
+          <h2 style={{margin:0,color:D.text,fontWeight:900,fontSize:20}}>مخزن الألوان</h2>
+          <div style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:10,alignItems:"center"}}>
+            <input style={s.input} value={newColor.name} onChange={e=>setNewColor({...newColor,name:e.target.value})} placeholder="اسم اللون"/>
+            <input type="color" style={s.colorPkr} value={newColor.code} onChange={e=>setNewColor({...newColor,code:e.target.value})}/>
+            <button style={s.addBtn} onClick={addColor}>إضافة</button>
           </div>
-          <div style={styles.colorList}>{colors.map((color) => <ColorChip key={color.name} color={color} onDelete={() => deleteColor(color.name)} />)}</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:10,marginTop:10}}>
+            {colors.map(c=>(
+              <span key={c.name} style={s.chip}>
+                <span style={{width:14,height:14,borderRadius:"50%",background:c.code,border:`1px solid ${D.border2}`,display:"inline-block"}}/>
+                {c.name}
+                <button style={s.xBtn} onClick={()=>setColors(colors.filter(x=>x.name!==c.name))}>×</button>
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
-      {page === "products" && (
-        <div style={styles.form}>
-          <h2 style={styles.formTitle}>إضافة منتجات</h2>
-          <div style={styles.inlineFormTwo}>
-            <input style={styles.input} value={newProduct} onChange={(e) => setNewProduct(e.target.value)} placeholder="مثال: حافظة كيبل / ميدالية / ستاند" />
-            <button style={styles.primaryButton} onClick={addProduct}>إضافة منتج</button>
+      {page==="products" && (
+        <div style={s.form}>
+          <h2 style={{margin:0,color:D.text,fontWeight:900,fontSize:20}}>المنتجات</h2>
+          <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:10,alignItems:"center"}}>
+            <input style={s.input} value={newProduct} onChange={e=>setNewProduct(e.target.value)} placeholder="اسم المنتج"/>
+            <button style={s.addBtn} onClick={addProduct}>إضافة</button>
           </div>
-          <div style={styles.colorList}>{products.map((p) => <span key={p} style={styles.productChip}>{p}<button style={styles.xButton} onClick={() => deleteProduct(p)}>×</button></span>)}</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:10,marginTop:10}}>
+            {products.map(p=>(
+              <span key={p} style={s.chip}>{p}<button style={s.xBtn} onClick={()=>setProducts(products.filter(x=>x!==p))}>×</button></span>
+            ))}
+          </div>
         </div>
       )}
 
-      {page === "reports" && (
-        <div style={styles.form}>
-          <h2 style={styles.formTitle}>التقارير والإحصائيات</h2>
-          <div style={styles.stats}>
-            <Stat title="عدد الطلبات المكتملة" value={moneyStats.completedCount} />
-            <Stat title="مبالغ مكتملة كلياً" value={formatMoney(moneyStats.completedTotal)} />
-            <Stat title="مكتملة هذا الأسبوع" value={`${moneyStats.weeklyCompletedCount} طلب`} />
-            <Stat title="مبالغ هذا الأسبوع" value={formatMoney(moneyStats.weeklyCompletedTotal)} />
-            <Stat title="مكتملة هذا الشهر" value={`${moneyStats.monthlyCompletedCount} طلب`} />
-            <Stat title="مبالغ هذا الشهر" value={formatMoney(moneyStats.monthlyCompletedTotal)} />
+      {page==="reports" && (
+        <div style={s.form}>
+          <h2 style={{margin:0,color:D.text,fontWeight:900,fontSize:20}}>التقارير</h2>
+          <div style={s.statsGrid}>
+            {[["المكتملة",stats.count,D.green],["إجمالي المكتملة",fmt(stats.total),D.green],["أسبوعية",`${stats.wCount} طلب`,D.accent],["مبالغ الأسبوع",fmt(stats.wTotal),D.accent],["شهرية",`${stats.mCount} طلب`,"#c084fc"],["مبالغ الشهر",fmt(stats.mTotal),"#c084fc"]].map(([l,v,c])=>(
+              <div key={l} style={s.statCard}><div style={{fontSize:12,color:D.textMuted,marginBottom:6}}>{l}</div><div style={{fontSize:18,fontWeight:900,color:c}}>{v}</div></div>
+            ))}
           </div>
-          <h3 style={styles.sectionTitle}>قائمة الزبائن</h3>
-          <button style={styles.primaryButton} onClick={exportCustomersPDF}>تحميل أسماء وأرقام الزبائن PDF</button>
-          <div style={styles.tableWrap}>
-            <table style={styles.table}>
-              <thead>
-                <tr><th>اسم الزبون</th><th>رقم الهاتف</th><th>المحافظة</th><th>العنوان</th><th>عدد الطلبات</th><th>الإجمالي</th></tr>
-              </thead>
-              <tbody>
-                {filteredCustomers.map((c) => (
-                  <tr key={c.phone}>
-                    <td>{c.name}</td><td>{c.phone}</td><td>{c.city}</td><td>{c.address}</td><td>{c.count}</td><td>{formatMoney(c.total)}</td>
-                  </tr>
+          <button style={{...s.addBtn,width:"fit-content"}} onClick={exportPDF}>تحميل قائمة الزبائن PDF</button>
+          <div style={{overflowX:"auto",background:D.surface2,borderRadius:12,border:`1px solid ${D.border}`}}>
+            <table style={{width:"100%",borderCollapse:"collapse",minWidth:600,fontSize:13}}>
+              <thead><tr style={{background:D.surface}}>
+                {["الاسم","الهاتف","المحافظة","العنوان","الطلبات","الإجمالي"].map(h=>(
+                  <th key={h} style={{padding:"10px 12px",textAlign:"right",color:D.textMuted,borderBottom:`1px solid ${D.border}`,fontWeight:700}}>{h}</th>
                 ))}
-              </tbody>
+              </tr></thead>
+              <tbody>{filteredCustomers.map(c=>(
+                <tr key={c.phone} style={{borderBottom:`1px solid ${D.border}`}}>
+                  {[c.name,c.phone,c.city,c.address,c.count,fmt(c.total)].map((v,i)=>(
+                    <td key={i} style={{padding:"9px 12px",color:i===5?D.green:D.text}}>{v}</td>
+                  ))}
+                </tr>
+              ))}</tbody>
             </table>
           </div>
         </div>
       )}
 
-      {page === "newOrder" && (
-        <Form title={editingOrderId ? `تعديل الطلب ${editingOrderId}` : "إضافة طلب جديد"}>
-          <h3 style={styles.sectionTitle}>معلومات الزبون</h3>
-          <Input label="اسم الزبون" value={orderForm.customerName} onChange={(v) => setOrderForm({ ...orderForm, customerName: v })} />
-          <Input label="رقم الهاتف / واتساب" value={orderForm.phone} onChange={(v) => setOrderForm({ ...orderForm, phone: v })} />
-          <label style={styles.label}>المحافظة
-            <input style={styles.input} list="province-list" value={orderForm.city} onChange={(e) => setOrderForm({ ...orderForm, city: e.target.value })} placeholder="ابحث عن المحافظة" />
-            <datalist id="province-list">{provinces.map((p) => <option key={p} value={p} />)}</datalist>
+      {page==="newOrder" && (
+        <div style={s.form}>
+          <h2 style={{margin:0,color:D.text,fontWeight:900,fontSize:20}}>{editingId?`تعديل الطلب ${editingId}`:"إضافة طلب جديد"}</h2>
+          <h3 style={s.secTitle}>معلومات الزبون</h3>
+          <F label="اسم الزبون" value={form.customerName} onChange={v=>setForm({...form,customerName:v})}/>
+          <F label="رقم الهاتف" value={form.phone} onChange={v=>setForm({...form,phone:v})}/>
+          <label style={s.label}>المحافظة
+            <input style={s.input} list="plist" value={form.city} onChange={e=>setForm({...form,city:e.target.value})}/>
+            <datalist id="plist">{provinces.map(p=><option key={p} value={p}/>)}</datalist>
           </label>
-          <Input label="العنوان التفصيلي" value={orderForm.address} onChange={(v) => setOrderForm({ ...orderForm, address: v })} />
+          <F label="العنوان التفصيلي" value={form.address} onChange={v=>setForm({...form,address:v})}/>
 
-          <h3 style={styles.sectionTitle}>تفاصيل المنتجات</h3>
-          {orderForm.items.map((item, index) => (
-            <div key={index} style={styles.itemBox}>
-              <div style={styles.row}>
-                <h3 style={styles.itemTitle}>منتج رقم {index + 1}</h3>
-                {orderForm.items.length > 1 && <button style={styles.deleteSmall} onClick={() => removeItem(index)}>حذف المنتج</button>}
+          <h3 style={s.secTitle}>تفاصيل المنتجات</h3>
+          {form.items.map((item,idx)=>(
+            <div key={idx} style={s.itemBox}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <b style={{color:D.text,fontSize:14}}>منتج رقم {idx+1}</b>
+                {form.items.length>1 && <button style={s.smRed} onClick={()=>setForm({...form,items:form.items.filter((_,i)=>i!==idx)})}>حذف المنتج</button>}
               </div>
-              <label style={styles.label}>المنتج
-                <select style={styles.input} value={item.product} onChange={(e) => updateItem(index, { product: e.target.value })}>
-                  {products.map((p) => <option key={p} value={p}>{p}</option>)}
+              <label style={s.label}>المنتج
+                <select style={s.input} value={item.product} onChange={e=>updItem(idx,{product:e.target.value})}>
+                  {products.map(p=><option key={p} value={p}>{p}</option>)}
                 </select>
               </label>
-
-              {item.product === "قطعة خاصة" && (
-                <div style={styles.imageBox}>
-                  <label style={styles.label}>صورة القطعة الخاصة</label>
-                  <input style={styles.input} type="file" accept="image/*" onChange={(e) => {
-                    const file = e.target.files[0];
-                    if (!file) return;
-                    const reader = new FileReader();
-                    const canvas = document.createElement("canvas");
-                    const img = new Image();
-                    reader.onload = () => { img.src = reader.result; };
-                    img.onload = () => {
-                      const MAX = 600;
-                      let width = img.width;
-                      let height = img.height;
-                      if (width > MAX) { height *= MAX / width; width = MAX; }
-                      canvas.width = width;
-                      canvas.height = height;
-                      const ctx = canvas.getContext("2d");
-                      ctx.drawImage(img, 0, 0, width, height);
-                      const compressed = canvas.toDataURL("image/jpeg", 0.7);
-                      updateItem(index, { image: compressed });
-                    };
+              {item.product==="قطعة خاصة" && (
+                <div style={s.imgBox}>
+                  <label style={s.label}>صورة القطعة الخاصة</label>
+                  <input style={s.input} type="file" accept="image/*" onChange={e=>{
+                    const file=e.target.files[0]; if(!file) return;
+                    const reader=new FileReader(); const canvas=document.createElement("canvas"); const img=new Image();
+                    reader.onload=()=>{img.src=reader.result;};
+                    img.onload=()=>{const MAX=600;let w=img.width,h=img.height;if(w>MAX){h*=MAX/w;w=MAX;}canvas.width=w;canvas.height=h;canvas.getContext("2d").drawImage(img,0,0,w,h);updItem(idx,{image:canvas.toDataURL("image/jpeg",0.7)});};
                     reader.readAsDataURL(file);
-                  }} />
-                  {item.image && <img src={item.image} alt="صورة القطعة" style={styles.previewImage} />}
+                  }}/>
+                  {item.image && <img src={item.image} alt="صورة" style={{width:150,maxHeight:150,objectFit:"cover",borderRadius:10,border:`1px solid ${D.border}`}}/>}
                 </div>
               )}
-
-              <div style={styles.namesBox}>
-                <b>الأسماء على المنتج — لكل اسم لون وعدد خاص</b>
-                {item.entries.map((entry, entryIndex) => (
-                  <div key={entryIndex} style={styles.entryRow}>
-                    <input style={styles.input} value={entry.name} onChange={(e) => updateEntry(index, entryIndex, { name: e.target.value })} placeholder={`الاسم ${entryIndex + 1}`} />
-                    <input style={styles.input} type="number" value={entry.qty} onChange={(e) => updateEntry(index, entryIndex, { qty: e.target.value })} placeholder="العدد" />
-                    <select style={styles.input} value={entry.colorName} onChange={(e) => {
-                      const selected = colors.find((c) => c.name === e.target.value);
-                      updateEntry(index, entryIndex, { colorName: selected?.name || "", colorCode: selected?.code || "#000000" });
-                    }}>
-                      {colors.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+              <div style={{display:"grid",gap:8}}>
+                <b style={{color:D.textMuted,fontSize:13}}>الأسماء — لكل اسم لون وعدد خاص</b>
+                {item.entries.map((entry,ei)=>(
+                  <div key={ei} style={s.eRow}>
+                    <input style={s.input} value={entry.name} onChange={e=>updEntry(idx,ei,{name:e.target.value})} placeholder={`الاسم ${ei+1}`}/>
+                    <input style={s.input} type="number" value={entry.qty} onChange={e=>updEntry(idx,ei,{qty:e.target.value})} placeholder="العدد"/>
+                    <select style={s.input} value={entry.colorName} onChange={e=>{const c=colors.find(x=>x.name===e.target.value);updEntry(idx,ei,{colorName:c?.name||"",colorCode:c?.code||"#000"});}}>
+                      {colors.map(c=><option key={c.name} value={c.name}>{c.name}</option>)}
                     </select>
-                    <div style={styles.entryColor}><span style={{ ...styles.colorDot, background: entry.colorCode }} />{entry.colorName}</div>
-                    {item.entries.length > 1 && <button style={styles.smallDanger} onClick={() => removeEntryFromItem(index, entryIndex)}>حذف</button>}
+                    <div style={s.delBox}>
+                      <span style={{width:12,height:12,borderRadius:"50%",background:entry.colorCode,border:`1px solid ${D.border2}`,display:"inline-block"}}/>
+                      {entry.colorName}
+                    </div>
+                    {item.entries.length>1 && <button style={s.smRed} onClick={()=>{const item2=form.items[idx];updItem(idx,{entries:item2.entries.filter((_,i)=>i!==ei)});}}>حذف</button>}
                   </div>
                 ))}
-                <button style={styles.smallBlue} onClick={() => addEntryToItem(index)}>+ إضافة اسم ثاني</button>
+                <button style={s.smBlue} onClick={()=>updItem(idx,{entries:[...item.entries,emptyEntry(colors)]})}>+ إضافة اسم</button>
               </div>
-              <Input label="ملاحظات المنتج" value={item.notes} onChange={(v) => updateItem(index, { notes: v })} />
+              <F label="ملاحظات المنتج" value={item.notes} onChange={v=>updItem(idx,{notes:v})}/>
             </div>
           ))}
+          <button style={s.addItem} onClick={()=>setForm({...form,items:[...form.items,emptyItem(colors,products)]})}>+ إضافة منتج آخر</button>
 
-          <button style={styles.addItemButton} onClick={addItem}>+ إضافة منتج آخر</button>
-
-          <h3 style={styles.sectionTitle}>الدفع والتوصيل</h3>
-          <Input label="السعر" type="number" value={orderForm.price} onChange={(v) => setOrderForm({ ...orderForm, price: v })} />
-          <Input label="العربون" type="number" value={orderForm.deposit} onChange={(v) => setOrderForm({ ...orderForm, deposit: v })} />
-          <Input label="رقم تتبع الوسيط / اختياري" value={orderForm.tracking} onChange={(v) => setOrderForm({ ...orderForm, tracking: v })} />
-          <Input label="ملاحظات عامة" value={orderForm.notes} onChange={(v) => setOrderForm({ ...orderForm, notes: v })} />
-          <div style={styles.deliveryBox}>
-            شركة التوصيل ثابتة: <b>{DELIVERY_COMPANY}</b> — أجرة التوصيل: <b>{DELIVERY_FEE.toLocaleString()} د.ع</b>
+          <h3 style={s.secTitle}>الدفع والتوصيل</h3>
+          <F label="السعر" type="number" value={form.price} onChange={v=>setForm({...form,price:v})}/>
+          <F label="العربون" type="number" value={form.deposit} onChange={v=>setForm({...form,deposit:v})}/>
+          <F label="رقم تتبع الوسيط (اختياري)" value={form.tracking} onChange={v=>setForm({...form,tracking:v})}/>
+          <F label="ملاحظات عامة" value={form.notes} onChange={v=>setForm({...form,notes:v})}/>
+          <div style={s.delivBox}>شركة التوصيل: <b>{DELIVERY_COMPANY}</b> — أجرة التوصيل: <b>{DELIVERY_FEE.toLocaleString()} د.ع</b></div>
+          <div style={{display:"flex",gap:10}}>
+            <button style={s.saveBtn} onClick={submitOrder}>{editingId?"حفظ التعديل":"حفظ الطلب"}</button>
+            {editingId && <button style={s.navBtn} onClick={resetForm}>إلغاء</button>}
           </div>
-          <div style={styles.buttons}>
-            <button style={styles.saveButton} onClick={submitOrder}>{editingOrderId ? "حفظ التعديل" : "حفظ الطلب"}</button>
-            {editingOrderId && <button style={styles.button} onClick={resetOrderForm}>إلغاء التعديل</button>}
-          </div>
-        </Form>
+        </div>
       )}
     </div>
   );
 }
 
-function Stat({ title, value }) {
-  return <div style={styles.card}><span style={styles.muted}>{title}</span><b style={styles.big}>{value}</b></div>;
+function F({label,value,onChange,type="text"}) {
+  return <label style={s.label}>{label}<input style={s.input} type={type} value={value} onChange={e=>onChange(e.target.value)}/></label>;
 }
 
-function Form({ title, children }) {
-  return <div style={styles.form}><h2 style={styles.formTitle}>{title}</h2>{children}</div>;
-}
-
-function Input({ label, value, onChange, type = "text" }) {
-  return <label style={styles.label}>{label}<input style={styles.input} type={type} value={value} onChange={(e) => onChange(e.target.value)} /></label>;
-}
-
-function ColorChip({ color, onDelete }) {
-  const border = color.code.toLowerCase() === "#ffffff" ? "#cbd5e1" : color.code;
-  return <span style={{ ...styles.colorChip, borderColor: border }}><span style={{ ...styles.colorDot, background: color.code }} />{color.name}<button style={styles.xButton} onClick={onDelete}>×</button></span>;
-}
-
-// ✅ OrderCard محسّن: تصميم جديد + السعر الكلي
-function OrderCard({ order, updateOrderStatus, deleteOrder, startEditOrder }) {
-  const whatsappLink = makeWhatsAppLink(order.customer.phone, buildFormalWhatsAppMessage(order));
-
-  const badgeStyle = {
-    "تحت التصميم": { background: "#E6F1FB", color: "#0C447C" },
-    "تحت الطباعة": { background: "#FAEEDA", color: "#633806" },
-    "جاهز":         { background: "#EAF3DE", color: "#27500A" },
-    "قيد التوصيل":  { background: "#EEEDFE", color: "#3C3489" },
-    "مكتمل":        { background: "#E1F5EE", color: "#085041" },
-    "ملغي":         { background: "#FCEBEB", color: "#791F1F" },
-  };
-
-  const bs = badgeStyle[order.status] || { background: "#F1EFE8", color: "#5F5E5A" };
-  const totalWithDelivery = Number(order.price || 0) + DELIVERY_FEE;
+function OrderCard({order,updateStatus,delOrder,startEdit}) {
+  const waLink = makeWALink(order.customer.phone, buildWAMsg(order));
+  const total = Number(order.price||0)+DELIVERY_FEE;
+  const ss = STATUS_STYLE[order.status]||{bg:"#1a1a1a",color:"#aaa",dot:"#888"};
 
   return (
-    <div style={styles.card}>
-      <div style={styles.row}>
-        <span style={{ fontSize: 13, color: "#64748b", fontWeight: 600 }}>{order.id}</span>
-        <span style={{ ...bs, borderRadius: 999, padding: "4px 12px", fontSize: 12, fontWeight: 700 }}>
-          {order.status}
-        </span>
+    <div style={s.card}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <span style={{fontSize:12,color:D.textMuted,fontWeight:700}}>{order.id}</span>
+        <span style={{background:ss.bg,color:ss.color,borderRadius:999,padding:"4px 12px",fontSize:11,fontWeight:800}}>{order.status}</span>
       </div>
 
-      <h2 style={{ fontSize: 17, margin: "10px 0 8px", fontWeight: 700 }}>
-        {order.items.map((i) => i.product).join(" + ")}
-      </h2>
+      <p style={{fontSize:16,fontWeight:800,color:D.text,margin:"0 0 10px"}}>{order.items.map(i=>i.product).join(" + ")}</p>
 
-      {order.items.map((item, idx) => (
-        <div key={idx} style={{ background: "#f8fafc", border: "0.5px solid #e2e8f0", borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
-          <p style={{ fontSize: 13, color: "#64748b", fontWeight: 600, marginBottom: 6 }}>
-            {idx + 1}. {item.product}
-          </p>
-          {getItemEntries(item).map((entry, eIdx) => (
-            <div key={eIdx} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, padding: "5px 0", borderBottom: eIdx < getItemEntries(item).length - 1 ? "0.5px solid #e2e8f0" : "none" }}>
-              <span style={{ width: 12, height: 12, borderRadius: "50%", background: entry.colorCode, border: "0.5px solid #94a3b8", flexShrink: 0, display: "inline-block" }} />
-              <b style={{ flex: 1 }}>{entry.name || "بدون اسم"}</b>
-              <span style={{ color: "#64748b", fontSize: 12 }}>العدد: {entry.qty} · {entry.colorName}</span>
-            </div>
-          ))}
-          {item.notes && <p style={{ fontSize: 12, color: "#94a3b8", marginTop: 6 }}>{item.notes}</p>}
-          {item.image && (
-            <img src={item.image} alt="صورة القطعة" style={{ width: "100%", maxHeight: 200, objectFit: "cover", borderRadius: 8, marginTop: 8, border: "0.5px solid #e2e8f0" }} />
-          )}
-        </div>
-      ))}
+      {order.items.map((item,idx)=>{
+        const entries=getItemEntries(item);
+        return (
+          <div key={idx} style={{background:D.surface2,border:`1px solid ${D.border}`,borderRadius:10,padding:"10px 12px",marginBottom:8}}>
+            <p style={{fontSize:12,color:D.textMuted,fontWeight:700,marginBottom:6,margin:"0 0 6px"}}>{idx+1}. {item.product}</p>
+            {entries.map((e,ei)=>(
+              <div key={ei} style={{display:"flex",alignItems:"center",gap:8,fontSize:13,padding:"5px 0",borderBottom:ei<entries.length-1?`1px solid ${D.border}`:"none"}}>
+                <span style={{width:11,height:11,borderRadius:"50%",background:e.colorCode,border:`1px solid ${D.border2}`,flexShrink:0,display:"inline-block"}}/>
+                <span style={{flex:1,fontWeight:700,color:D.text}}>{e.name||"بدون اسم"}</span>
+                <span style={{color:D.textMuted,fontSize:12}}>العدد: {e.qty} · {e.colorName}</span>
+              </div>
+            ))}
+            {item.notes && <p style={{fontSize:12,color:D.textDim,margin:"6px 0 0"}}>{item.notes}</p>}
+            {item.image && <img src={item.image} alt="صورة" style={{width:"100%",maxHeight:180,objectFit:"cover",borderRadius:8,marginTop:8,border:`1px solid ${D.border}`}}/>}
+          </div>
+        );
+      })}
 
-      <hr style={{ border: "none", borderTop: "0.5px solid #e2e8f0", margin: "12px 0" }} />
+      <hr style={{border:"none",borderTop:`1px solid ${D.border}`,margin:"12px 0"}}/>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12, fontSize: 13 }}>
-        {[
-          ["الزبون", `${order.customer.name} · ${formatPhoneNumber(order.customer.phone)}`],
-          ["العنوان", `${order.customer.city} / ${order.customer.address}`],
-          ["تاريخ الطلب", formatOrderDate(order.createdAtISO || order.createdAt)],
-          ["التتبع", order.tracking || "لا يوجد"],
-        ].map(([label, value]) => (
-          <div key={label}>
-            <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 2 }}>{label}</div>
-            <div style={{ fontWeight: 600 }}>{value}</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+        {[["الزبون",`${order.customer.name} · ${fmtPhone(order.customer.phone)}`],["العنوان",`${order.customer.city} / ${order.customer.address}`],["تاريخ الطلب",fmtDate(order.createdAtISO||order.createdAt)],["التتبع",order.tracking||"لا يوجد"]].map(([l,v])=>(
+          <div key={l}>
+            <div style={{fontSize:11,color:D.textDim,marginBottom:2}}>{l}</div>
+            <div style={{fontSize:13,fontWeight:700,color:D.text}}>{v}</div>
           </div>
         ))}
       </div>
 
       {/* ✅ قسم المبالغ مع السعر الكلي */}
-      <div style={{ display: "flex", gap: 12, background: "#f8fafc", borderRadius: 10, padding: "10px 14px", marginBottom: 12, flexWrap: "wrap" }}>
+      <div style={{display:"flex",background:D.surface2,borderRadius:10,border:`1px solid ${D.border}`,marginBottom:12,flexWrap:"wrap",overflow:"hidden"}}>
         {[
-          ["السعر", formatMoney(order.price), null],
-          ["العربون", formatMoney(order.deposit), null],
-          ["المتبقي", formatMoney(Number(order.price) - Number(order.deposit)), "#185FA5"],
-          ["التوصيل", formatMoney(DELIVERY_FEE), null],
-          ["السعر الكلي", formatMoney(totalWithDelivery), "#0F6E56"],
-        ].map(([label, value, color]) => (
-          <div key={label} style={label === "السعر الكلي" ? { borderRight: "1.5px solid #e2e8f0", paddingRight: 12 } : {}}>
-            <div style={{ fontSize: 11, color: "#94a3b8" }}>{label}</div>
-            <div style={{ fontSize: label === "السعر الكلي" ? 15 : 14, fontWeight: label === "السعر الكلي" ? 800 : 700, color: color || "inherit" }}>{value}</div>
+          ["السعر",fmt(order.price),D.text],
+          ["العربون",fmt(order.deposit),D.text],
+          ["المتبقي",fmt(Number(order.price)-Number(order.deposit)),"#60a5fa"],
+          ["التوصيل",fmt(DELIVERY_FEE),D.text],
+          ["السعر الكلي",fmt(total),D.green],
+        ].map(([l,v,c],i,arr)=>(
+          <div key={l} style={{padding:"10px 14px",flex:1,minWidth:70,borderRight:i<arr.length-1?`1px solid ${D.border}`:"none"}}>
+            <div style={{fontSize:10,color:D.textDim,marginBottom:3}}>{l}</div>
+            <div style={{fontSize:l==="السعر الكلي"?14:13,fontWeight:l==="السعر الكلي"?900:700,color:c}}>{v}</div>
           </div>
         ))}
       </div>
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-        <a href={whatsappLink} target="_blank" rel="noreferrer"
-          style={{ background: "#E1F5EE", border: "0.5px solid #5DCAA5", color: "#085041", borderRadius: 8, padding: "7px 12px", textDecoration: "none", fontSize: 13, fontWeight: 700 }}>
-          📱 واتساب
-        </a>
-        <button style={{ background: "#f1f5f9", border: "0.5px solid #e2e8f0", color: "#0f172a", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 13, fontWeight: 700 }}
-          onClick={() => downloadInvoicePDF(order)}>
-          🧾 فاتورة
-        </button>
-        <button style={{ background: "#E6F1FB", border: "0.5px solid #85B7EB", color: "#0C447C", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 13, fontWeight: 700 }}
-          onClick={() => startEditOrder(order)}>
-          ✏️ تعديل
-        </button>
-        <button style={{ background: "#FCEBEB", border: "0.5px solid #F09595", color: "#791F1F", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 13, fontWeight: 700 }}
-          onClick={() => deleteOrder(order.id)}>
-          🗑 حذف
-        </button>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+        <a href={waLink} target="_blank" rel="noreferrer" style={{background:"#0d2a1a",border:"1px solid #1a5c34",color:"#4ade80",borderRadius:8,padding:"7px 12px",textDecoration:"none",fontSize:12,fontWeight:800}}>📱 واتساب</a>
+        <button style={{background:D.surface2,border:`1px solid ${D.border}`,color:D.textMuted,borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"Cairo,inherit"}} onClick={()=>downloadPDF(invoiceHtml(order),`invoice-${order.id}.pdf`)}>🧾 فاتورة</button>
+        <button style={{background:D.accentBg,border:"1px solid #1d4ed8",color:D.accent,borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"Cairo,inherit"}} onClick={()=>startEdit(order)}>✏️ تعديل</button>
+        <button style={{background:D.redBg,border:"1px solid #7f1d1d",color:D.red,borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"Cairo,inherit"}} onClick={()=>delOrder(order.id)}>🗑 حذف</button>
       </div>
 
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", paddingTop: 10, borderTop: "0.5px solid #e2e8f0" }}>
-        {statuses.map((s) => {
-          const active = order.status === s;
-          return (
-            <button key={s}
-              style={{ border: active ? "1.5px solid #5DCAA5" : "0.5px solid #e2e8f0", background: active ? "#E1F5EE" : "#f8fafc", color: active ? "#085041" : "#64748b", borderRadius: 999, padding: "5px 10px", fontSize: 11, cursor: "pointer", fontWeight: 700, fontFamily: "inherit" }}
-              onClick={() => updateOrderStatus(order.id, s)}>
-              {s}
-            </button>
-          );
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",paddingTop:10,borderTop:`1px solid ${D.border}`}}>
+        {statuses.map(st=>{
+          const active=order.status===st;
+          const ss2=STATUS_STYLE[st]||{};
+          return <button key={st} style={{border:active?`1px solid ${ss2.dot||"#888"}`:`1px solid ${D.border}`,background:active?(ss2.bg||"#222"):"transparent",color:active?(ss2.color||"#eee"):D.textMuted,borderRadius:999,padding:"4px 10px",fontSize:11,cursor:"pointer",fontWeight:700,fontFamily:"Cairo,inherit"}} onClick={()=>updateStatus(order.id,st)}>{st}</button>;
         })}
       </div>
     </div>
   );
 }
-
-function CustomerCard({ customer }) {
-  const whatsapp = makeWhatsAppLink(customer.phone, `مرحبا ${customer.name}، عدنا عروض جديدة من متجر 3D`);
-  return (
-    <div style={styles.card}>
-      <div style={styles.row}>
-        <b>{customer.name}</b>
-        <a style={styles.whatsapp} href={whatsapp} target="_blank" rel="noreferrer">واتساب</a>
-      </div>
-      <p><b>الهاتف:</b> {customer.phone}</p>
-      <p><b>العنوان:</b> {customer.city} / {customer.address}</p>
-      <p><b>عدد الطلبات:</b> {customer.count}</p>
-      <p><b>إجمالي الشراء:</b> {customer.total.toLocaleString()} د.ع</p>
-    </div>
-  );
-}
-
-const styles = {
-  app: { minHeight: "100vh", background: "#f1f5f9", padding: 24, fontFamily: "Cairo, Tahoma, Arial, sans-serif", color: "#0f172a" },
-  topbar: { background: "#ffffff", borderRadius: 24, padding: 24, display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap", boxShadow: "0 10px 35px #0f172a14", border: "1px solid #e5e7eb" },
-  title: { margin: 0, fontSize: 30, color: "#0f172a", fontWeight: 900 },
-  subtitle: { margin: "8px 0 0", color: "#475569" },
-  buttons: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" },
-  button: { border: "1px solid #cbd5e1", background: "#f8fafc", color: "#0f172a", borderRadius: 12, padding: "10px 14px", cursor: "pointer", fontWeight: 800 },
-  activeButton: { border: "1px solid #1d4ed8", background: "#dbeafe", color: "#1d4ed8", borderRadius: 12, padding: "10px 14px", cursor: "pointer", fontWeight: 800 },
-  primaryButton: { border: 0, background: "#2563eb", color: "white", borderRadius: 12, padding: "10px 14px", cursor: "pointer", fontWeight: 800 },
-  dangerButton: { border: 0, background: "#dc2626", color: "white", borderRadius: 12, padding: "10px 14px", cursor: "pointer", fontWeight: 800 },
-  smallButton: { border: "1px solid #cbd5e1", background: "#f8fafc", color: "#0f172a", borderRadius: 10, padding: "8px 10px", cursor: "pointer", fontWeight: 800 },
-  statusActive: { border: "1px solid #16a34a", background: "#dcfce7", color: "#166534", borderRadius: 10, padding: "8px 10px", cursor: "pointer", fontWeight: 800 },
-  deleteSmall: { marginTop: 12, border: 0, background: "#fee2e2", color: "#991b1b", borderRadius: 10, padding: "8px 10px", cursor: "pointer", fontWeight: 800 },
-  smallDanger: { border: 0, background: "#fee2e2", color: "#991b1b", borderRadius: 10, padding: "8px 10px", cursor: "pointer", fontWeight: 800 },
-  smallBlue: { border: 0, background: "#dbeafe", color: "#1d4ed8", borderRadius: 10, padding: "9px 12px", cursor: "pointer", fontWeight: 800, width: "fit-content" },
-  addItemButton: { border: "1px dashed #2563eb", background: "#eff6ff", color: "#1d4ed8", borderRadius: 14, padding: 14, cursor: "pointer", fontWeight: 900 },
-  stats: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 16, marginTop: 18 },
-  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16, marginTop: 18 },
-  gridTwo: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16, marginTop: 18 },
-  exportRow: { display: "flex", justifyContent: "flex-start", marginTop: 18 },
-  tableWrap: { overflowX: "auto", background: "white", borderRadius: 16, border: "1px solid #e5e7eb" },
-  table: { width: "100%", borderCollapse: "collapse", minWidth: 700 },
-  card: { background: "white", borderRadius: 24, padding: 22, boxShadow: "0 4px 20px rgba(15,23,42,0.08)", border: "1px solid #e5e7eb" },
-  form: { maxWidth: 980, margin: "18px auto", background: "white", borderRadius: 24, padding: 24, display: "grid", gap: 14, boxShadow: "0 4px 20px rgba(15,23,42,0.08)", border: "1px solid #e5e7eb" },
-  formTitle: { margin: 0, color: "#0f172a", fontWeight: 900 },
-  sectionTitle: { margin: "14px 0 0", color: "#1d4ed8", borderBottom: "1px solid #e5e7eb", paddingBottom: 8, fontWeight: 900 },
-  search: { width: "100%", boxSizing: "border-box", marginTop: 18, border: "1px solid #cbd5e1", borderRadius: 16, padding: 16, fontSize: 16, outline: "none", background: "white", color: "#0f172a" },
-  label: { display: "grid", gap: 8, fontWeight: 900, color: "#0f172a" },
-  input: { border: "1px solid #cbd5e1", borderRadius: 14, padding: 12, fontSize: 15, outline: "none", background: "white", color: "#0f172a", fontFamily: "inherit", minWidth: 0 },
-  colorPicker: { height: 46, width: 70, border: "1px solid #cbd5e1", borderRadius: 14, background: "white", padding: 4, cursor: "pointer" },
-  saveButton: { border: 0, background: "#16a34a", color: "white", borderRadius: 14, padding: 15, fontSize: 17, cursor: "pointer", fontWeight: 900 },
-  row: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" },
-  orderId: { color: "#1e293b" },
-  badge: { background: "#dbeafe", color: "#1d4ed8", borderRadius: 999, padding: "7px 12px", fontSize: 13, fontWeight: 900 },
-  whatsapp: { background: "#dcfce7", color: "#166534", borderRadius: 999, padding: "8px 12px", textDecoration: "none", fontWeight: 900 },
-  whatsappSend: { background: "#22c55e", color: "white", borderRadius: 12, padding: "10px 14px", textDecoration: "none", fontWeight: 900 },
-  invoiceButton: { border: 0, background: "#0f172a", color: "white", borderRadius: 12, padding: "10px 14px", cursor: "pointer", fontWeight: 900 },
-  muted: { color: "#475569" },
-  big: { display: "block", fontSize: 28, marginTop: 8, color: "#0f172a" },
-  cardTitle: { color: "#0f172a", marginBottom: 10, fontWeight: 900 },
-  deliveryBox: { background: "#eff6ff", color: "#1e3a8a", border: "1px solid #bfdbfe", padding: 14, borderRadius: 14 },
-  inlineForm: { display: "grid", gridTemplateColumns: "1fr auto auto", gap: 10, alignItems: "center" },
-  inlineFormTwo: { display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center" },
-  colorList: { display: "flex", flexWrap: "wrap", gap: 10, marginTop: 10 },
-  colorChip: { display: "inline-flex", alignItems: "center", gap: 8, background: "#f8fafc", color: "#0f172a", border: "2px solid #cbd5e1", borderRadius: 999, padding: "8px 12px", fontWeight: 900 },
-  productChip: { background: "#f1f5f9", color: "#0f172a", border: "1px solid #cbd5e1", borderRadius: 999, padding: "8px 12px", fontWeight: 900 },
-  xButton: { marginRight: 8, border: 0, background: "#fee2e2", color: "#991b1b", borderRadius: 999, cursor: "pointer", fontWeight: 900 },
-  colorDot: { display: "inline-block", width: 18, height: 18, borderRadius: "50%", border: "1px solid #94a3b8", verticalAlign: "middle" },
-  colorDotSmall: { display: "inline-block", width: 12, height: 12, borderRadius: "50%", border: "1px solid #94a3b8", verticalAlign: "middle" },
-  itemBox: { display: "grid", gap: 12, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 18, padding: 16 },
-  itemTitle: { margin: 0, color: "#0f172a", fontWeight: 900 },
-  namesBox: { display: "grid", gap: 10 },
-  entryRow: { display: "grid", gridTemplateColumns: "1.5fr 90px 1fr 150px auto", gap: 8, alignItems: "center" },
-  entryColor: { background: "white", border: "1px solid #e2e8f0", borderRadius: 12, padding: 10, display: "flex", gap: 8, alignItems: "center", fontWeight: 800 },
-  orderItemLine: { background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: 10, margin: "8px 0" },
-  orderEntryLine: { marginTop: 8, paddingTop: 8, borderTop: "1px solid #e2e8f0" },
-  imageBox: { display: "grid", gap: 10, background: "#ffffff", border: "1px dashed #94a3b8", borderRadius: 14, padding: 12 },
-  previewImage: { width: 160, maxHeight: 160, objectFit: "cover", borderRadius: 12, border: "1px solid #cbd5e1" },
-};
