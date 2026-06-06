@@ -189,8 +189,13 @@ function MainApp({C, darkMode, setDarkMode}) {
       const data = [];
       for (const d of snap.docs) {
         const raw = d.data();
-        const cleanStatus = String(raw.status||DEFAULT_STATUS).trim();
-        // ✅ Migration: إذا الحالة مختلفة عن المخزونة، حدّثها تلقائياً
+        let cleanStatus = String(raw.status||DEFAULT_STATUS).replace(/[\u200B-\u200F\uFEFF]/g,"").replace(/\s+/g," ").trim();
+        // ✅ إذا الحالة مو ضمن القائمة الرسمية، نلاقي أقرب تطابق
+        if (!statuses.includes(cleanStatus)) {
+          const match = statuses.find(st => cleanStatus.includes(st) || st.includes(cleanStatus));
+          cleanStatus = match || DEFAULT_STATUS;
+        }
+        // ✅ Migration: حدّث Firebase إذا اختلفت الحالة
         if (raw.status !== cleanStatus) {
           try { await updateDoc(doc(db,"orders",d.id),{status:cleanStatus}); } catch{}
         }
@@ -221,8 +226,9 @@ function MainApp({C, darkMode, setDarkMode}) {
         const itemsTxt=o.items?.map(i=>`${i.product} ${getItemEntries(i).map(e=>`${e.name} ${e.colorName}`).join(" ")}`).join(" ")||"";
         const txt=`${o.id} ${o.status} ${o.customer?.name||""} ${o.customer?.phone||""} ${o.customer?.city||""} ${itemsTxt}`.toLowerCase();
         const matchSearch=!q||txt.includes(q);
-        const oStatus=String(o.status||"").trim();
-        const fStatus=String(statusFilter).trim();
+        const cleanS=(s)=>String(s||"").replace(/[\u200B-\u200F\uFEFF]/g,"").replace(/\s+/g," ").trim();
+        const oStatus=cleanS(o.status);
+        const fStatus=cleanS(statusFilter);
         const matchStatus=fStatus==="الكل"||oStatus===fStatus;
         return matchSearch&&matchStatus;
       });
@@ -313,6 +319,29 @@ function MainApp({C, darkMode, setDarkMode}) {
     if(products.includes(p)) return alert("هذا المنتج موجود");
     setProducts([...products,p]); setNewProduct("");
   }
+  const [fixing, setFixing] = useState(false);
+  async function fixAllStatuses() {
+    if (!confirm("سيتم فحص وإصلاح حالات كل الطلبات. متأكد؟")) return;
+    setFixing(true);
+    const clean = (s) => String(s||"").replace(/[\u200B-\u200F\uFEFF]/g,"").replace(/\s+/g," ").trim();
+    let fixed = 0;
+    const updated = [];
+    for (const o of orders) {
+      let st = clean(o.status);
+      if (!statuses.includes(st)) {
+        const m = statuses.find(x => st.includes(x) || x.includes(st));
+        st = m || DEFAULT_STATUS;
+      }
+      if (o.status !== st && o.firebaseId) {
+        try { await updateDoc(doc(db,"orders",o.firebaseId),{status:st}); fixed++; } catch{}
+      }
+      updated.push({...o, status:st});
+    }
+    setOrders(updated);
+    setFixing(false);
+    alert("تم إصلاح " + fixed + " طلب");
+  }
+
   function exportCustomersPDF() {
     const rows=filteredCustomers.map((c,i)=>`<tr><td style="border:1px solid #cbd5e1;padding:10px;">${i+1}</td><td style="border:1px solid #cbd5e1;padding:10px;">${c.name||""}</td><td style="border:1px solid #cbd5e1;padding:10px;">${c.phone||""}</td><td style="border:1px solid #cbd5e1;padding:10px;">${c.city||""}</td><td style="border:1px solid #cbd5e1;padding:10px;">${c.address||""}</td><td style="border:1px solid #cbd5e1;padding:10px;">${c.count||0}</td><td style="border:1px solid #cbd5e1;padding:10px;">${fmt(c.total)}</td></tr>`).join("");
     downloadPDF(`<div dir="rtl" style="font-family:Tahoma;padding:28px;color:#111827;background:#fff;width:900px;"><h1>تقرير الزبائن - متجر نايت ستور</h1><p>تاريخ التصدير: ${new Date().toLocaleString("ar-IQ")}</p><table style="width:100%;border-collapse:collapse;font-size:14px;"><thead><tr style="background:#eff6ff;"><th style="border:1px solid #cbd5e1;padding:10px;">#</th><th style="border:1px solid #cbd5e1;padding:10px;">الاسم</th><th style="border:1px solid #cbd5e1;padding:10px;">الهاتف</th><th style="border:1px solid #cbd5e1;padding:10px;">المحافظة</th><th style="border:1px solid #cbd5e1;padding:10px;">العنوان</th><th style="border:1px solid #cbd5e1;padding:10px;">الطلبات</th><th style="border:1px solid #cbd5e1;padding:10px;">الإجمالي</th></tr></thead><tbody>${rows}</tbody></table></div>`,"customers.pdf");
@@ -495,7 +524,10 @@ function MainApp({C, darkMode, setDarkMode}) {
                 </div>
               ))}
             </div>
-            <button style={{background:C.accent,color:"#fff",border:0,borderRadius:8,padding:"9px 16px",cursor:"pointer",fontWeight:800,fontFamily:"Cairo,inherit",fontSize:13,width:"fit-content"}} onClick={exportCustomersPDF}>تحميل قائمة الزبائن PDF</button>
+            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+              <button style={{background:C.accent,color:"#fff",border:0,borderRadius:8,padding:"9px 16px",cursor:"pointer",fontWeight:800,fontFamily:"Cairo,inherit",fontSize:13}} onClick={exportCustomersPDF}>تحميل قائمة الزبائن PDF</button>
+              <button style={{background:C.yellowBg,color:C.yellow,border:`1px solid ${C.yellow}`,borderRadius:8,padding:"9px 16px",cursor:fixing?"wait":"pointer",fontWeight:800,fontFamily:"Cairo,inherit",fontSize:13,opacity:fixing?0.6:1}} onClick={fixAllStatuses} disabled={fixing}>{fixing?"⚙️ جاري الإصلاح...":"🔧 إصلاح حالات الطلبات"}</button>
+            </div>
             <div style={{overflowX:"auto",background:C.surface2,borderRadius:12,border:`1px solid ${C.border}`}}>
               <table style={{width:"100%",borderCollapse:"collapse",minWidth:600,fontSize:13}}>
                 <thead><tr style={{background:C.surface}}>
