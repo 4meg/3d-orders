@@ -70,6 +70,16 @@ function getItemEntries(item){
   return[];
 }
 function parseOrderDate(o){ const d=new Date(o.createdAtISO||o.createdAt); return isNaN(d)?new Date():d; }
+// ✅ طلب متأخر: مر عليه أكثر من 7 أيام وما خلص
+const OVERDUE_DAYS = 7;
+function isOverdue(o){
+  if (o.status==="مكتمل" || o.status==="ملغي") return false;
+  const days = (Date.now() - parseOrderDate(o).getTime()) / (1000*60*60*24);
+  return days >= OVERDUE_DAYS;
+}
+function daysSince(o){
+  return Math.floor((Date.now() - parseOrderDate(o).getTime()) / (1000*60*60*24));
+}
 function fmt(v){ return `${Number(v||0).toLocaleString()} د.ع`; }
 function fmtDate(s){
   return new Date(s).toLocaleString("en-GB",{timeZone:"Asia/Baghdad",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:true});
@@ -229,7 +239,9 @@ function MainApp({C, darkMode, setDarkMode}) {
         const cleanS=(s)=>String(s||"").replace(/[\u200B-\u200F\uFEFF]/g,"").replace(/\s+/g," ").trim();
         const oStatus=cleanS(o.status);
         const fStatus=cleanS(statusFilter);
-        const matchStatus=fStatus==="الكل"||oStatus===fStatus;
+        const matchStatus = fStatus==="الكل" ? true
+          : fStatus==="المتأخرة" ? isOverdue(o)
+          : oStatus===fStatus;
         return matchSearch&&matchStatus;
       });
   },[orders,search,statusFilter]);
@@ -342,6 +354,57 @@ function MainApp({C, darkMode, setDarkMode}) {
     alert("تم إصلاح " + fixed + " طلب");
   }
 
+  // ✅ نسخة احتياطية: تصدير كل الطلبات لملف JSON
+  function exportBackup() {
+    const backup = {
+      exportedAt: new Date().toISOString(),
+      version: 1,
+      orders: orders.map(({firebaseId, ...rest}) => rest),
+      colors,
+      products,
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], {type:"application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `backup-night-store-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ✅ استعادة من ملف JSON
+  const [restoring, setRestoring] = useState(false);
+  async function importBackup(file) {
+    if (!file) return;
+    if (!confirm("سيتم استعادة الطلبات من الملف. الطلبات الحالية تبقى موجودة. متأكد؟")) return;
+    setRestoring(true);
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!data.orders || !Array.isArray(data.orders)) {
+        alert("الملف غير صالح");
+        setRestoring(false);
+        return;
+      }
+      const existingIds = new Set(orders.map(o => o.id));
+      let added = 0;
+      const newOnes = [];
+      for (const o of data.orders) {
+        if (existingIds.has(o.id)) continue; // ما نكرر
+        const ref = await addDoc(collection(db,"orders"), o);
+        newOnes.push({...o, firebaseId:ref.id});
+        added++;
+      }
+      setOrders([...orders, ...newOnes]);
+      if (data.colors && Array.isArray(data.colors)) setColors(data.colors);
+      if (data.products && Array.isArray(data.products)) setProducts(data.products);
+      alert("تم استعادة " + added + " طلب");
+    } catch(e) {
+      alert("خطأ بقراءة الملف: " + e.message);
+    }
+    setRestoring(false);
+  }
+
   function exportCustomersPDF() {
     const rows=filteredCustomers.map((c,i)=>`<tr><td style="border:1px solid #cbd5e1;padding:10px;">${i+1}</td><td style="border:1px solid #cbd5e1;padding:10px;">${c.name||""}</td><td style="border:1px solid #cbd5e1;padding:10px;">${c.phone||""}</td><td style="border:1px solid #cbd5e1;padding:10px;">${c.city||""}</td><td style="border:1px solid #cbd5e1;padding:10px;">${c.address||""}</td><td style="border:1px solid #cbd5e1;padding:10px;">${c.count||0}</td><td style="border:1px solid #cbd5e1;padding:10px;">${fmt(c.total)}</td></tr>`).join("");
     downloadPDF(`<div dir="rtl" style="font-family:Tahoma;padding:28px;color:#111827;background:#fff;width:900px;"><h1>تقرير الزبائن - متجر نايت ستور</h1><p>تاريخ التصدير: ${new Date().toLocaleString("ar-IQ")}</p><table style="width:100%;border-collapse:collapse;font-size:14px;"><thead><tr style="background:#eff6ff;"><th style="border:1px solid #cbd5e1;padding:10px;">#</th><th style="border:1px solid #cbd5e1;padding:10px;">الاسم</th><th style="border:1px solid #cbd5e1;padding:10px;">الهاتف</th><th style="border:1px solid #cbd5e1;padding:10px;">المحافظة</th><th style="border:1px solid #cbd5e1;padding:10px;">العنوان</th><th style="border:1px solid #cbd5e1;padding:10px;">الطلبات</th><th style="border:1px solid #cbd5e1;padding:10px;">الإجمالي</th></tr></thead><tbody>${rows}</tbody></table></div>`,"customers.pdf");
@@ -420,6 +483,7 @@ function MainApp({C, darkMode, setDarkMode}) {
             ["تحت التصميم",orders.filter(o=>o.status==="تحت التصميم").length,"#60a5fa"],
             ["تحت الطباعة",orders.filter(o=>o.status==="تحت الطباعة").length,"#fbbf24"],
             ["قيد التوصيل",orders.filter(o=>o.status==="قيد التوصيل").length,"#a78bfa"],
+            ["⚠️ متأخرة",orders.filter(isOverdue).length,"#f87171"],
             ["مكتملة الأسبوع",fmt(stats.wTotal),C.green],
             ["مكتملة الشهر",fmt(stats.mTotal),"#34d399"],
           ].map(([label,val,color])=>(
@@ -441,6 +505,10 @@ function MainApp({C, darkMode, setDarkMode}) {
               {st}
             </button>;
           })}
+          <button onClick={()=>setStatusFilter("المتأخرة")}
+            style={{border:statusFilter==="المتأخرة"?`1px solid #f87171`:`1px solid ${C.border}`,background:statusFilter==="المتأخرة"?"#250a0a":"transparent",color:statusFilter==="المتأخرة"?"#f87171":C.textMuted,borderRadius:999,padding:"6px 14px",cursor:"pointer",fontWeight:700,fontFamily:"Cairo,inherit",fontSize:12}}>
+            ⚠️ المتأخرة
+          </button>
         </div>
 
         {/* ── Pages ── */}
@@ -527,6 +595,18 @@ function MainApp({C, darkMode, setDarkMode}) {
             <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
               <button style={{background:C.accent,color:"#fff",border:0,borderRadius:8,padding:"9px 16px",cursor:"pointer",fontWeight:800,fontFamily:"Cairo,inherit",fontSize:13}} onClick={exportCustomersPDF}>تحميل قائمة الزبائن PDF</button>
               <button style={{background:C.yellowBg,color:C.yellow,border:`1px solid ${C.yellow}`,borderRadius:8,padding:"9px 16px",cursor:fixing?"wait":"pointer",fontWeight:800,fontFamily:"Cairo,inherit",fontSize:13,opacity:fixing?0.6:1}} onClick={fixAllStatuses} disabled={fixing}>{fixing?"⚙️ جاري الإصلاح...":"🔧 إصلاح حالات الطلبات"}</button>
+            </div>
+
+            <div style={{borderTop:`1px solid ${C.border}`,paddingTop:16,marginTop:4}}>
+              <h3 style={{margin:"0 0 12px",color:C.text,fontWeight:800,fontSize:16}}>💾 النسخ الاحتياطي</h3>
+              <p style={{margin:"0 0 12px",color:C.textMuted,fontSize:13}}>احفظ نسخة من كل بياناتك بشكل دوري حتى ما تخسر شي</p>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                <button style={{background:C.greenBg,color:C.green,border:`1px solid ${C.green}`,borderRadius:8,padding:"9px 16px",cursor:"pointer",fontWeight:800,fontFamily:"Cairo,inherit",fontSize:13}} onClick={exportBackup}>⬇️ تنزيل نسخة احتياطية</button>
+                <label style={{background:C.surface2,color:C.text,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 16px",cursor:restoring?"wait":"pointer",fontWeight:800,fontFamily:"Cairo,inherit",fontSize:13,opacity:restoring?0.6:1}}>
+                  {restoring?"⏳ جاري الاستعادة...":"⬆️ استعادة من ملف"}
+                  <input type="file" accept=".json" style={{display:"none"}} disabled={restoring} onChange={e=>importBackup(e.target.files[0])}/>
+                </label>
+              </div>
             </div>
             <div style={{overflowX:"auto",background:C.surface2,borderRadius:12,border:`1px solid ${C.border}`}}>
               <table style={{width:"100%",borderCollapse:"collapse",minWidth:600,fontSize:13}}>
@@ -650,12 +730,16 @@ function OrderCard({order,C,updateStatus,delOrder,startEdit}) {
   const waLink=makeWALink(order.customer?.phone||"",buildWAMsg(order));
   const total=Number(order.price||0)+DELIVERY_FEE;
   const ss=STATUS_STYLE[order.status]||{bg:"#1a1a1a",color:"#aaa",dot:"#888"};
+  const overdue=isOverdue(order);
 
   return (
-    <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:18}}>
+    <div style={{background:C.surface,border:overdue?`1px solid #f87171`:`1px solid ${C.border}`,borderRadius:14,padding:18,position:"relative"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
         <span style={{fontSize:12,color:C.textMuted,fontWeight:700}}>{order.id}</span>
-        <span style={{background:ss.bg,color:ss.color,borderRadius:999,padding:"4px 12px",fontSize:11,fontWeight:800}}>{order.status}</span>
+        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+          {overdue && <span style={{background:"#250a0a",color:"#f87171",borderRadius:999,padding:"4px 10px",fontSize:11,fontWeight:800,border:"1px solid #f87171"}}>⚠️ متأخر {daysSince(order)} يوم</span>}
+          <span style={{background:ss.bg,color:ss.color,borderRadius:999,padding:"4px 12px",fontSize:11,fontWeight:800}}>{order.status}</span>
+        </div>
       </div>
 
       <p style={{fontSize:16,fontWeight:800,color:C.text,margin:"0 0 10px"}}>{order.items?.map(i=>i.product).join(" + ")}</p>
