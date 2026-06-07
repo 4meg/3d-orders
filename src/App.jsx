@@ -291,13 +291,24 @@ function MainApp({C, darkMode, setDarkMode}) {
   const updEntry=(ii,ei,p)=>{ const item=form.items[ii]; const entries=[...item.entries]; entries[ei]={...entries[ei],...p}; updItem(ii,{entries}); };
   const resetForm=()=>{ setEditingId(null); setForm({customerName:"",phone:"",city:"بغداد",address:"",items:[emptyItem(colors,products)],price:"",deposit:"",tracking:"",notes:""}); };
 
+  // ✅ توليد رقم طلب جديد فريد: أعلى رقم موجود + 1
+  function generateNextId() {
+    let maxNum = 5000;
+    for (const o of orders) {
+      const n = Number(String(o.id||"").replace("O-",""));
+      if (!isNaN(n) && n > maxNum) maxNum = n;
+    }
+    return `O-${maxNum + 1}`;
+  }
+
   async function submitOrder() {
     if(!form.customerName||!form.phone||!form.items[0]?.product) return alert("اكتب اسم الزبون ورقم الهاتف وتفاصيل الطلب");
     const cleanItems=form.items.map(item=>({...item,entries:item.entries.map(e=>({...e,name:e.name.trim(),qty:Number(e.qty||1)})).filter(e=>e.name)}));
     const old=orders.find(o=>o.id===editingId);
     const saved={
-      id:editingId||`O-${5001+orders.length}`,
-      status:old?.status||DEFAULT_STATUS,
+      id:editingId||generateNextId(),
+      // ✅ الطلب الجديد دائماً يبدأ "تحت التصميم"، والتعديل يحافظ على حالته
+      status:editingId?(old?.status||DEFAULT_STATUS):DEFAULT_STATUS,
       customer:{name:form.customerName,phone:normalizePhone(form.phone),city:form.city,address:form.address},
       items:cleanItems,price:Number(form.price||0),deposit:Number(form.deposit||0),
       tracking:form.tracking,notes:form.notes,
@@ -317,6 +328,9 @@ function MainApp({C, darkMode, setDarkMode}) {
       const ref=await addDoc(collection(db,"orders"),saved);
       setOrders([...orders,{...saved,firebaseId:ref.id}]);
       sendTelegram(buildTGMsg(saved,"new"));
+      // ✅ نرجّع الفلتر للكل والبحث فاضي حتى يظهر الطلب الجديد فوراً
+      setStatusFilter("الكل");
+      setSearch("");
     }
     resetForm(); setPage("orders");
   }
