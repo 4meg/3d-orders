@@ -117,6 +117,31 @@ function buildTGMsg(order, type="new") {
   return `${prefix}\n\n🔢 رقم الطلب: <code>${order.id}</code>\n📊 الحالة: <b>${order.status}</b>\n\n👤 الزبون: <b>${order.customer.name}</b>\n📞 الهاتف: <code>${order.customer.phone}</code>\n📍 العنوان: ${order.customer.city} / ${order.customer.address}\n\n📦 المنتجات:\n${items}\n\n💰 السعر: ${fmt(order.price)}\n💳 العربون: ${fmt(order.deposit)}\n⏳ المتبقي: ${fmt(Number(order.price)-Number(order.deposit))}\n🚚 التوصيل: ${fmt(DELIVERY_FEE)}\n✅ <b>الكلي: ${fmt(total)}</b>\n\n📝 ملاحظات: ${order.notes||"لا يوجد"}`;
 }
 
+// ─── Alwaseet (الوسيط) API ───────────────────────────────────────────────────
+// الدوال تتصل بـ Serverless functions على Vercel (مو مباشرة لتجنب CORS وإخفاء كلمة السر)
+const WASEET_API = "/api";
+
+async function waseetFetchData(type, params={}) {
+  const url = new URL(WASEET_API + "/waseet-data", window.location.origin);
+  url.searchParams.set("type", type);
+  for (const [k,v] of Object.entries(params)) url.searchParams.set(k, v);
+  const res = await fetch(url.toString());
+  const json = await res.json();
+  if (!json.status) throw new Error(json.msg || "خطأ بجلب البيانات");
+  return json.data || [];
+}
+
+async function waseetCreateOrder(payload) {
+  const res = await fetch(WASEET_API + "/waseet-create-order", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json();
+  if (!json.status) throw new Error(json.msg || "فشل إنشاء الطلب بالوسيط");
+  return json; // فيه qr_id, qr_link
+}
+
 // ─── WhatsApp message ────────────────────────────────────────────────────────
 function buildWAMsg(order) {
   const items=order.items.map((item,i)=>{
@@ -187,6 +212,11 @@ function MainApp({C, darkMode, setDarkMode}) {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [form, setForm]           = useState({customerName:"",phone:"",city:"بغداد",address:"",items:[emptyItem(defaultColors,defaultProducts)],price:"",deposit:"",tracking:"",notes:""});
   const [deleteConfirm, setDeleteConfirm] = useState(null); // orderId waiting confirm
+  // ── حالة الوسيط ──
+  const [waseetCities, setWaseetCities] = useState(()=>loadLS("ns_waseet_cities",[]));
+  const [waseetPackages, setWaseetPackages] = useState(()=>loadLS("ns_waseet_packages",[]));
+  const [waseetSending, setWaseetSending] = useState(null); // order id being sent
+  const [waseetModal, setWaseetModal] = useState(null); // { order, regions, cityId, regionId, packageSize, loading }
 
   useEffect(()=>{ saveLS("ns_colors_v1",colors); },[colors]);
   useEffect(()=>{ saveLS("ns_products_v1",products); },[products]);
@@ -354,6 +384,12 @@ function MainApp({C, darkMode, setDarkMode}) {
     }
     setOrders(orders.map(x=>x.id===id?{...x,status}:x));
     sendTelegram(buildTGMsg({...o,newStatus:status},"status"));
+
+    // ✅ تسجيل تلقائي بالوسيط عند "جاهز" (إذا ما انرسل من قبل)
+    if (status === "جاهز" && o && !o.waseet?.qr_id) {
+      // نفتح نافذة الاختيار حتى يأكد المدينة/المنطقة قبل الإرسال
+      openWaseetModal({...o, status});
+    }
   }
 
   async function delOrder(id) {
@@ -440,6 +476,120 @@ function MainApp({C, darkMode, setDarkMode}) {
   }
 
   // ✅ نسخة احتياطية: تصدير كل الطلبات لملف JSON
+  // ── تحميل بيانات الوسيط (مدن + أحجام) مرة وحدة ──
+  useEffect(()=>{
+    async function loadWaseetRefData() {
+      try {
+        if (waseetCities.length === 0) {
+          const cities = await waseetFetchData("cities");
+          setWaseetCities(cities);
+          saveLS("ns_waseet_cities", cities);
+        }
+        if (waseetPackages.length === 0) {
+          const pkgs = await waseetFetchData("packages");
+          setWaseetPackages(pkgs);
+          saveLS("ns_waseet_packages", pkgs);
+        }
+      } catch(e) {
+        // لو فشل (مثلاً الـ API مو مفعّل بعد) نتجاهل بصمت
+        console.warn("Waseet ref data:", e.message);
+      }
+    }
+    loadWaseetRefData();
+  },[]);
+
+  // ── فتح نافذة الإرسال للوسيط (نختار المدينة/المنطقة/الحجم) ──
+  async function openWaseetModal(order) {
+    // نحاول نخمّن المدينة من اسم محافظة الطلب
+    const guessCity = waseetCities.find(c => c.city_name?.includes(order.customer?.city) || order.customer?.city?.includes(c.city_name));
+    setWaseetModal({
+      order,
+      regions: [],
+      cityId: guessCity?.id || "",
+      regionId: "",
+      packageSize: waseetPackages[0]?.id || "",
+      itemsNumber: order.items?.reduce((s,it)=>s+getItemEntries(it).reduce((a,e)=>a+Number(e.qty||1),0),0) || 1,
+      loading: false,
+    });
+    // لو خمّنا المدينة، نجيب مناطقها
+    if (guessCity?.id) {
+      try {
+        const regions = await waseetFetchData("regions", { city_id: guessCity.id });
+        setWaseetModal(m => m ? {...m, regions} : m);
+      } catch{}
+    }
+  }
+
+  // ── لما يتغير اختيار المدينة بالنافذة، نجيب مناطقها ──
+  async function onWaseetCityChange(cityId) {
+    setWaseetModal(m => ({...m, cityId, regionId:"", regions:[], loading:true}));
+    try {
+      const regions = await waseetFetchData("regions", { city_id: cityId });
+      setWaseetModal(m => m ? {...m, regions, loading:false} : m);
+    } catch(e) {
+      setWaseetModal(m => m ? {...m, loading:false} : m);
+      alert("فشل جلب المناطق: " + e.message);
+    }
+  }
+
+  // ── الإرسال الفعلي للوسيط ──
+  async function submitToWaseet() {
+    const m = waseetModal;
+    if (!m) return;
+    if (!m.cityId || !m.regionId || !m.packageSize) {
+      return alert("اختر المدينة والمنطقة وحجم الطلب");
+    }
+    const order = m.order;
+    setWaseetSending(order.id);
+
+    try {
+      const cityName = waseetCities.find(c=>String(c.id)===String(m.cityId))?.city_name || order.customer.city;
+      const typeName = order.items?.map(i=>i.product).join(" + ") || "منتجات";
+
+      const result = await waseetCreateOrder({
+        client_name: order.customer.name,
+        client_mobile: order.customer.phone,
+        city_id: m.cityId,
+        region_id: m.regionId,
+        location: order.customer.address || cityName,
+        type_name: typeName,
+        items_number: m.itemsNumber,
+        price: Number(order.price||0) + DELIVERY_FEE,
+        package_size: m.packageSize,
+        merchant_notes: order.notes || "",
+        replacement: 0,
+      });
+
+      // نحفظ qr_id و qr_link بالطلب
+      const updated = {
+        ...order,
+        waseet: { qr_id: result.qr_id, qr_link: result.qr_link, sentAt: new Date().toISOString() },
+        tracking: String(result.qr_id || order.tracking || ""),
+        status: order.status === "تحت التصميم" || order.status === "تحت الطباعة" ? "جاهز" : order.status,
+      };
+
+      // تحديث Firebase لكل النسخ
+      const allCopies = orders.filter(o=>o.id===order.id && o.firebaseId);
+      for (const copy of allCopies) {
+        try { await updateDoc(doc(db,"orders",copy.firebaseId), { waseet: updated.waseet, tracking: updated.tracking, status: updated.status }); } catch{}
+      }
+      setOrders(orders.map(o=>o.id===order.id?{...o,...updated}:o));
+      setWaseetModal(null);
+      setWaseetSending(null);
+
+      sendTelegram(`🚚 <b>تم تسجيل الطلب بالوسيط</b>\n\n🔢 رقم الطلب: <code>${order.id}</code>\n📦 رقم الوصل (QR): <code>${result.qr_id}</code>\n👤 الزبون: ${order.customer.name}`);
+
+      // نفتح الوصل للطباعة
+      if (result.qr_link) {
+        window.open(result.qr_link, "_blank");
+      }
+      alert("تم التسجيل بالوسيط ✅\nرقم الوصل: " + result.qr_id);
+    } catch(e) {
+      setWaseetSending(null);
+      alert("فشل الإرسال للوسيط:\n" + e.message);
+    }
+  }
+
   function exportBackup() {
     const backup = {
       exportedAt: new Date().toISOString(),
@@ -610,7 +760,7 @@ function MainApp({C, darkMode, setDarkMode}) {
         {!loading && page==="orders" && (
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:16}}>
             {filteredOrders.map(o=>(
-              <OrderCard key={o.id} order={o} C={C} updateStatus={updateStatus} delOrder={(id)=>setDeleteConfirm(id)} startEdit={startEdit}/>
+              <OrderCard key={o.id} order={o} C={C} updateStatus={updateStatus} delOrder={(id)=>setDeleteConfirm(id)} startEdit={startEdit} openWaseetModal={openWaseetModal} waseetSending={waseetSending}/>
             ))}
             {filteredOrders.length===0 && <div style={{color:C.textMuted,padding:40,textAlign:"center",gridColumn:"1/-1"}}>لا توجد طلبات</div>}
           </div>
@@ -811,6 +961,54 @@ function MainApp({C, darkMode, setDarkMode}) {
           </div>
         </div>
       )}
+
+      {/* ── نافذة الإرسال للوسيط ── */}
+      {waseetModal && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:20}}>
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:16,padding:28,display:"grid",gap:16,maxWidth:440,width:"100%",maxHeight:"90vh",overflowY:"auto"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <h3 style={{margin:0,color:C.text,fontSize:18}}>🚚 إرسال للوسيط — {waseetModal.order.id}</h3>
+              <button style={{border:0,background:"transparent",color:C.textMuted,fontSize:22,cursor:"pointer"}} onClick={()=>setWaseetModal(null)}>×</button>
+            </div>
+
+            <div style={{background:C.surface2,borderRadius:10,padding:12,fontSize:13,color:C.textMuted}}>
+              <div>الزبون: <b style={{color:C.text}}>{waseetModal.order.customer.name}</b></div>
+              <div>الهاتف: <b style={{color:C.text}}>{waseetModal.order.customer.phone}</b></div>
+              <div>المبلغ الكلي: <b style={{color:C.green}}>{fmt(Number(waseetModal.order.price)+DELIVERY_FEE)}</b></div>
+            </div>
+
+            <label style={{display:"grid",gap:6,fontWeight:800,color:C.textMuted,fontSize:13}}>المدينة
+              <select style={{border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 12px",fontSize:14,background:C.surface2,color:C.text,fontFamily:"Cairo,inherit"}} value={waseetModal.cityId} onChange={e=>onWaseetCityChange(e.target.value)}>
+                <option value="">— اختر المدينة —</option>
+                {waseetCities.map(c=><option key={c.id} value={c.id}>{c.city_name}</option>)}
+              </select>
+            </label>
+
+            <label style={{display:"grid",gap:6,fontWeight:800,color:C.textMuted,fontSize:13}}>المنطقة {waseetModal.loading && <span style={{color:C.accent,fontSize:11}}>⏳ جاري التحميل...</span>}
+              <select style={{border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 12px",fontSize:14,background:C.surface2,color:C.text,fontFamily:"Cairo,inherit"}} value={waseetModal.regionId} onChange={e=>setWaseetModal(m=>({...m,regionId:e.target.value}))} disabled={!waseetModal.cityId||waseetModal.loading}>
+                <option value="">— اختر المنطقة —</option>
+                {waseetModal.regions.map(r=><option key={r.id} value={r.id}>{r.region_name}</option>)}
+              </select>
+            </label>
+
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              <label style={{display:"grid",gap:6,fontWeight:800,color:C.textMuted,fontSize:13}}>حجم الطلب
+                <select style={{border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 12px",fontSize:14,background:C.surface2,color:C.text,fontFamily:"Cairo,inherit"}} value={waseetModal.packageSize} onChange={e=>setWaseetModal(m=>({...m,packageSize:e.target.value}))}>
+                  {waseetPackages.map(p=><option key={p.id} value={p.id}>{p.size}</option>)}
+                </select>
+              </label>
+              <label style={{display:"grid",gap:6,fontWeight:800,color:C.textMuted,fontSize:13}}>عدد القطع
+                <input type="number" style={{border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 12px",fontSize:14,background:C.surface2,color:C.text,fontFamily:"Cairo,inherit"}} value={waseetModal.itemsNumber} onChange={e=>setWaseetModal(m=>({...m,itemsNumber:Number(e.target.value)}))}/>
+              </label>
+            </div>
+
+            <div style={{display:"flex",gap:10,marginTop:4}}>
+              <button style={{border:0,background:C.green,color:"#fff",borderRadius:10,padding:"12px 24px",cursor:waseetSending?"wait":"pointer",fontWeight:800,fontFamily:"Cairo,inherit",fontSize:14,flex:1,opacity:waseetSending?0.6:1}} onClick={submitToWaseet} disabled={!!waseetSending}>{waseetSending?"⏳ جاري الإرسال...":"✅ تأكيد الإرسال"}</button>
+              <button style={{border:`1px solid ${C.border}`,background:"transparent",color:C.textMuted,borderRadius:10,padding:"12px 20px",cursor:"pointer",fontWeight:700,fontFamily:"Cairo,inherit",fontSize:14}} onClick={()=>setWaseetModal(null)}>إلغاء</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -820,11 +1018,12 @@ function Inp({label,value,onChange,type="text",C}) {
   return <label style={{display:"grid",gap:6,fontWeight:800,color:C.textMuted,fontSize:13}}>{label}<input style={inp} type={type} value={value} onChange={e=>onChange(e.target.value)}/></label>;
 }
 
-function OrderCard({order,C,updateStatus,delOrder,startEdit}) {
+function OrderCard({order,C,updateStatus,delOrder,startEdit,openWaseetModal,waseetSending}) {
   const waLink=makeWALink(order.customer?.phone||"",buildWAMsg(order));
   const total=Number(order.price||0)+DELIVERY_FEE;
   const ss=STATUS_STYLE[order.status]||{bg:"#1a1a1a",color:"#aaa",dot:"#888"};
   const overdue=isOverdue(order);
+  const sentToWaseet=!!order.waseet?.qr_id;
 
   return (
     <div style={{background:C.surface,border:overdue?`1px solid #f87171`:`1px solid ${C.border}`,borderRadius:14,padding:18,position:"relative"}}>
@@ -881,6 +1080,18 @@ function OrderCard({order,C,updateStatus,delOrder,startEdit}) {
         <button style={{background:C.surface2,border:`1px solid ${C.border}`,color:C.textMuted,borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"Cairo,inherit"}} onClick={()=>downloadPDF(invoiceHtml(order),`invoice-${order.id}.pdf`)}>🧾 فاتورة</button>
         <button style={{background:C.accentBg,border:`1px solid ${C.accent}`,color:C.accent,borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"Cairo,inherit"}} onClick={()=>startEdit(order)}>✏️ تعديل</button>
         <button style={{background:C.redBg,border:`1px solid ${C.red}`,color:C.red,borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:"Cairo,inherit"}} onClick={()=>delOrder(order.id)}>🗑 حذف</button>
+      </div>
+
+      {/* ── زر الوسيط ── */}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+        {sentToWaseet ? (
+          <>
+            <span style={{background:"#0d2818",border:"1px solid #3fb950",color:"#3fb950",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:800}}>✅ بالوسيط · {order.waseet.qr_id}</span>
+            {order.waseet.qr_link && <a href={order.waseet.qr_link} target="_blank" rel="noreferrer" style={{background:"#1e293b",border:"1px solid #475569",color:"#cbd5e1",borderRadius:8,padding:"7px 12px",textDecoration:"none",fontSize:12,fontWeight:800}}>🖨 طباعة الوصل</a>}
+          </>
+        ) : (
+          <button style={{background:"#3b2a00",border:"1px solid #d29922",color:"#fbbf24",borderRadius:8,padding:"7px 12px",fontSize:12,fontWeight:800,cursor:waseetSending===order.id?"wait":"pointer",fontFamily:"Cairo,inherit",opacity:waseetSending===order.id?0.6:1,width:"100%"}} onClick={()=>openWaseetModal(order)} disabled={waseetSending===order.id}>{waseetSending===order.id?"⏳ جاري الإرسال...":"🚚 إرسال لشركة الوسيط"}</button>
+        )}
       </div>
 
       <div style={{display:"flex",gap:6,flexWrap:"wrap",paddingTop:10,borderTop:`1px solid ${C.border}`}}>
