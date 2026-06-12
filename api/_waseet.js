@@ -1,14 +1,10 @@
-// ═══════════════════════════════════════════════════════════
-//  دوال مساعدة مشتركة للتعامل مع API الوسيط (CommonJS)
-// ═══════════════════════════════════════════════════════════
-
 const WASEET_BASE = "https://api.alwaseet-iq.net/v1/merchant";
 
 let cachedToken = null;
 let tokenTime = 0;
-const TOKEN_TTL = 1000 * 60 * 30; // 30 دقيقة
+const TOKEN_TTL = 1000 * 60 * 30;
 
-async function getToken() {
+export async function getToken() {
   if (cachedToken && Date.now() - tokenTime < TOKEN_TTL) {
     return cachedToken;
   }
@@ -20,7 +16,6 @@ async function getToken() {
     throw new Error("WASEET_USERNAME أو WASEET_PASSWORD غير موجودة بالإعدادات");
   }
 
-  // نستخدم URLSearchParams بدل FormData (أضمن على Vercel)
   const body = new URLSearchParams();
   body.append("username", username);
   body.append("password", password);
@@ -48,7 +43,7 @@ async function getToken() {
   return cachedToken;
 }
 
-async function waseetGet(path, params = {}) {
+export async function waseetGet(path, params = {}) {
   const token = await getToken();
   const url = new URL(`${WASEET_BASE}/${path}`);
   url.searchParams.set("token", token);
@@ -64,7 +59,7 @@ async function waseetGet(path, params = {}) {
   }
 }
 
-async function waseetPost(path, body = {}) {
+export async function waseetPost(path, body = {}) {
   const token = await getToken();
   const url = new URL(`${WASEET_BASE}/${path}`);
   url.searchParams.set("token", token);
@@ -88,10 +83,8 @@ async function waseetPost(path, body = {}) {
   }
 }
 
-function setCors(res) {
+export function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
-
-module.exports = { getToken, waseetGet, waseetPost, setCors };

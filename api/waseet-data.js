@@ -1,15 +1,6 @@
-// ═══════════════════════════════════════════════════════════
-//  /api/waseet-data  (CommonJS)
-//  يجيب البيانات المرجعية من الوسيط: المدن، المناطق، الأحجام
-//    GET /api/waseet-data?type=cities
-//    GET /api/waseet-data?type=regions&city_id=1
-//    GET /api/waseet-data?type=packages
-//    GET /api/waseet-data?type=statuses
-// ═══════════════════════════════════════════════════════════
+import { waseetGet, setCors } from "./_waseet.js";
 
-const { waseetGet, setCors } = require("./_waseet.js");
-
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   setCors(res);
   if (req.method === "OPTIONS") return res.status(200).end();
 
@@ -41,4 +32,4 @@ module.exports = async function handler(req, res) {
   } catch (err) {
     return res.status(500).json({ status: false, msg: err.message });
   }
-};
+}

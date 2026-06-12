@@ -1,11 +1,6 @@
-// ═══════════════════════════════════════════════════════════
-//  /api/waseet-create-order  (CommonJS)
-//  ينشئ طلب توصيل بشركة الوسيط ويرجع qr_id و qr_link
-// ═══════════════════════════════════════════════════════════
+import { waseetPost, setCors } from "./_waseet.js";
 
-const { waseetPost, setCors } = require("./_waseet.js");
-
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   setCors(res);
   if (req.method === "OPTIONS") return res.status(200).end();
 
@@ -64,4 +59,4 @@ module.exports = async function handler(req, res) {
   } catch (err) {
     return res.status(500).json({ status: false, msg: err.message });
   }
-};
+}
