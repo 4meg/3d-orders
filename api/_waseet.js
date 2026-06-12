@@ -20,16 +20,24 @@ async function getToken() {
     throw new Error("WASEET_USERNAME أو WASEET_PASSWORD غير موجودة بالإعدادات");
   }
 
-  const form = new FormData();
-  form.append("username", username);
-  form.append("password", password);
+  // نستخدم URLSearchParams بدل FormData (أضمن على Vercel)
+  const body = new URLSearchParams();
+  body.append("username", username);
+  body.append("password", password);
 
   const res = await fetch(`${WASEET_BASE}/login`, {
     method: "POST",
-    body: form,
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
   });
 
-  const json = await res.json();
+  const text = await res.text();
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error("رد غير متوقع من الوسيط عند الدخول: " + text.slice(0, 100));
+  }
 
   if (!json.status || !json.data?.token) {
     throw new Error("فشل تسجيل الدخول للوسيط: " + (json.msg || "خطأ غير معروف"));
@@ -48,7 +56,12 @@ async function waseetGet(path, params = {}) {
     url.searchParams.set(k, v);
   }
   const res = await fetch(url.toString());
-  return res.json();
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("رد غير متوقع من الوسيط: " + text.slice(0, 100));
+  }
 }
 
 async function waseetPost(path, body = {}) {
@@ -56,16 +69,23 @@ async function waseetPost(path, body = {}) {
   const url = new URL(`${WASEET_BASE}/${path}`);
   url.searchParams.set("token", token);
 
-  const form = new FormData();
+  const params = new URLSearchParams();
   for (const [k, v] of Object.entries(body)) {
-    form.append(k, v);
+    params.append(k, v);
   }
 
   const res = await fetch(url.toString(), {
     method: "POST",
-    body: form,
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
   });
-  return res.json();
+
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("رد غير متوقع من الوسيط: " + text.slice(0, 100));
+  }
 }
 
 function setCors(res) {
